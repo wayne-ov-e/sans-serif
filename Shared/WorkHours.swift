@@ -41,6 +41,34 @@ struct WorkHours: Equatable, Sendable {
         WorkHours(start: start, end: Self.wrap(end + step, in: (start + 1)...23))
     }
 
+    /// A number typed for the start. On a twelve-hour clock, 1 to 12 keep the
+    /// half of the day the start is in now; 13 and up are taken as written.
+    /// The hours keep their length where the day has room for it.
+    func typingStart(_ number: Int, twelveHour: Bool = WorkHours.clockIsTwelveHour) -> WorkHours {
+        let hour = Self.hour(number, twelveHour: twelveHour, afternoon: start >= 12)
+        return WorkHours(start: hour, end: hour >= end ? hour + length : end)
+    }
+
+    /// A number typed for the end. On a twelve-hour clock, 1 to 12 mean the
+    /// first such hour after the start: with a start of 9 AM, 5 is 5 PM.
+    func typingEnd(_ number: Int, twelveHour: Bool = WorkHours.clockIsTwelveHour) -> WorkHours {
+        guard twelveHour, (1...12).contains(number) else {
+            return WorkHours(start: start, end: min(max(number, 0), 23))
+        }
+        let morning = number % 12
+        return WorkHours(start: start, end: morning > start ? morning : morning + 12)
+    }
+
+    private static func hour(_ number: Int, twelveHour: Bool, afternoon: Bool) -> Int {
+        guard twelveHour, (1...12).contains(number) else { return min(max(number, 0), 23) }
+        return number % 12 + (afternoon ? 12 : 0)
+    }
+
+    /// Whether the user's clock counts to twelve twice a day.
+    static var clockIsTwelveHour: Bool {
+        (DateFormatter.dateFormat(fromTemplate: "j", options: 0, locale: .current) ?? "").contains("a")
+    }
+
     private static func wrap(_ value: Int, in range: ClosedRange<Int>) -> Int {
         let count = range.count
         return range.lowerBound + ((value - range.lowerBound) % count + count) % count

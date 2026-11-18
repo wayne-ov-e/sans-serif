@@ -191,8 +191,9 @@ private struct SettingLine: View {
 }
 
 /// The working hours, as words under their line: "9 AM to 5 PM". Each hour
-/// is changed where it stands. A tap moves it an hour on, and a drag across
-/// it runs through the hours, later to the right and earlier to the left.
+/// is changed where it stands. A tap on it brings up the number keys and the
+/// hour is typed. A drag across it runs through the hours instead, later to
+/// the right and earlier to the left.
 private struct HoursLine: View {
     @AppStorage(WorkHours.startKey) private var start = WorkHours.standard.start
     @AppStorage(WorkHours.endKey) private var end = WorkHours.standard.end
@@ -201,9 +202,17 @@ private struct HoursLine: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            HourWord(hour: hours.start, name: "Starts") { set(hours.steppingStart(by: $0)) }
+            HourWord(hour: hours.start, name: "Starts") {
+                set(hours.steppingStart(by: $0))
+            } typed: {
+                set(hours.typingStart($0))
+            }
             Text("to").foregroundStyle(.inkFaded)
-            HourWord(hour: hours.end, name: "Ends") { set(hours.steppingEnd(by: $0)) }
+            HourWord(hour: hours.end, name: "Ends") {
+                set(hours.steppingEnd(by: $0))
+            } typed: {
+                set(hours.typingEnd($0))
+            }
         }
         .typeStyle(.listName)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -221,13 +230,26 @@ private struct HourWord: View {
     let name: String
     /// Moves the hour on or back by a number of hours.
     let step: (Int) -> Void
+    /// A number was typed for the hour.
+    let typed: (Int) -> Void
 
     /// Hours already stepped through in the drag under way.
     @State private var dragged = 0
+    @State private var isTyping = false
+    @State private var digits = ""
+    @FocusState private var isFocused: Bool
     /// How far a finger travels for each hour.
     private static let perHour: CGFloat = 24
 
     var body: some View {
+        if isTyping {
+            field
+        } else {
+            word
+        }
+    }
+
+    private var word: some View {
         Text(WorkHours.name(ofHour: hour))
             .foregroundStyle(.ink)
             // Pencil dots under a word that can be changed, as on the first page.
@@ -236,7 +258,11 @@ private struct HourWord: View {
             .animation(.quick, value: hour)
             .padding(.vertical, 6)
             .contentShape(Rectangle().inset(by: -6))
-            .onTapGesture { step(1) }
+            .onTapGesture {
+                digits = ""
+                isTyping = true
+                isFocused = true
+            }
             .onHorizontalDrag { value in
                 let wanted = Int((value.translation.width / Self.perHour).rounded(.towardZero))
                 if wanted != dragged {
@@ -250,8 +276,50 @@ private struct HourWord: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(name)
             .accessibilityValue(WorkHours.name(ofHour: hour))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint("Tap to type the hour")
             .accessibilityAdjustableAction { direction in
                 step(direction == .increment ? 1 : -1)
             }
+    }
+
+    /// The hour being typed: one or two digits. It is kept as soon as it can
+    /// only be one hour, so most hours take a single key.
+    private var field: some View {
+        TextField("", text: $digits, prompt: Text(WorkHours.name(ofHour: hour)).foregroundStyle(.inkFaded))
+            #if os(iOS)
+            .keyboardType(.numberPad)
+            #endif
+            .foregroundStyle(.ink)
+            .fixedSize()
+            .padding(.vertical, 6)
+            .focused($isFocused)
+            .accessibilityLabel(name)
+            .onChange(of: digits) { _, new in
+                let clean = String(new.filter(\.isNumber).prefix(2))
+                if clean != new { digits = clean }
+                guard let number = Int(clean) else { return }
+                // "1" and "2" may be the start of 10 to 23. Anything else is whole.
+                if clean.count == 2 || number > 2 {
+                    keep()
+                } else {
+                    let waited = clean
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(1.5))
+                        if isTyping, digits == waited { keep() }
+                    }
+                }
+            }
+            .onChange(of: isFocused) { _, focused in if !focused { keep() } }
+            .onDisappear { if let number = Int(digits) { typed(number) } }
+    }
+
+    private func keep() {
+        guard isTyping else { return }
+        let number = Int(digits)
+        isTyping = false
+        isFocused = false
+        digits = ""
+        if let number { typed(number) }
     }
 }

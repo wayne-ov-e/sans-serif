@@ -170,8 +170,12 @@ final class WalkthroughTests: XCTestCase {
         line("Work hours").tap()
         wait(for: "Ends")
         let end = line("Ends").value as? String
+        // A tap brings up the number keys, and one key is enough for most hours.
         line("Ends").tap()
-        XCTAssertNotEqual(line("Ends").value as? String, end, "a tap moves the hour on")
+        type("7")
+        wait(for: "Ends")
+        XCTAssertNotEqual(line("Ends").value as? String, end, "a typed number becomes the hour")
+        XCTAssertEqual(line("Ends").value as? String, WorkHours7PM.name, "7 after a morning start is 7 in the evening")
         let start = line("Starts").value as? String
         let word = line("Starts").coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
         word.press(forDuration: 0.05, thenDragTo: word.withOffset(CGVector(dx: -60, dy: 0)))
@@ -238,7 +242,8 @@ final class WalkthroughTests: XCTestCase {
         point(0.5, 0.5).tap()
         for task in ["One\n", "Two"] {
             type(task)
-            Thread.sleep(forTimeInterval: 0.4)
+            // The pen is picked up again after Return. Keys pressed before that are lost.
+            Thread.sleep(forTimeInterval: 1)
         }
         app.buttons["done"].tap()
         XCTAssertTrue(app.buttons["Two"].waitForExistence(timeout: 3))
@@ -273,6 +278,13 @@ final class WalkthroughTests: XCTestCase {
     }
 
     // MARK: Helpers
+
+    /// Seven in the evening, as this device writes hours.
+    private enum WorkHours7PM {
+        static var name: String {
+            (Calendar.current.date(bySettingHour: 19, minute: 0, second: 0, of: .now) ?? .now).formatted(.dateTime.hour())
+        }
+    }
 
     /// The first thing on the page that reads as `label`. Quick, for asking whether it is there.
     private func first(_ label: String) -> XCUIElement {

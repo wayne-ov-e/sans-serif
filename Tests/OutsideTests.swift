@@ -55,6 +55,26 @@ struct WorkHoursTests {
         #expect(WorkHours(start: 9, end: 23).steppingEnd(by: 1) == WorkHours(start: 9, end: 10))
     }
 
+    @Test func aTypedNumberIsReadAsTheClockWouldSayIt() {
+        let hours = WorkHours(start: 9, end: 17)
+        // The end: the first such hour after the start.
+        #expect(hours.typingEnd(6, twelveHour: true) == WorkHours(start: 9, end: 18))
+        #expect(hours.typingEnd(11, twelveHour: true) == WorkHours(start: 9, end: 11))
+        #expect(hours.typingEnd(12, twelveHour: true) == WorkHours(start: 9, end: 12))
+        #expect(hours.typingEnd(9, twelveHour: true) == WorkHours(start: 9, end: 21))
+        #expect(hours.typingEnd(18, twelveHour: true) == WorkHours(start: 9, end: 18))
+        #expect(hours.typingEnd(6, twelveHour: false) == WorkHours(start: 9, end: 10))
+        #expect(hours.typingEnd(18, twelveHour: false) == WorkHours(start: 9, end: 18))
+        // The start keeps its half of the day.
+        #expect(hours.typingStart(8, twelveHour: true) == WorkHours(start: 8, end: 17))
+        #expect(hours.typingStart(12, twelveHour: true) == WorkHours(start: 0, end: 17))
+        #expect(hours.typingStart(13, twelveHour: true) == WorkHours(start: 13, end: 17))
+        #expect(WorkHours(start: 13, end: 17).typingStart(2, twelveHour: true) == WorkHours(start: 14, end: 17))
+        // A start typed past the end takes the end along.
+        #expect(hours.typingStart(18, twelveHour: false) == WorkHours(start: 18, end: 23))
+        #expect(hours.typingStart(99, twelveHour: false) == WorkHours(start: 22, end: 23))
+    }
+
     @Test func settingsKeepTheHours() throws {
         let defaults = try #require(UserDefaults(suiteName: "work-hours-test"))
         defaults.removePersistentDomain(forName: "work-hours-test")
