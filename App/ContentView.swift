@@ -1,0 +1,84 @@
+import CoreData
+import SwiftData
+import SwiftUI
+
+struct ContentView: View {
+    @Query(sort: \TaskList.order) private var lists: [TaskList]
+
+    /// The list this window is showing. Each window remembers its own.
+    @SceneStorage("currentList") private var currentID: String?
+    @Environment(\.modelContext) private var context
+    @Environment(\.undoManager) private var undoManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage(Setting.guideDone.key) private var guideDone = Setting.guideDone.defaultValue
+    @AppStorage(Setting.guideReplay.key) private var guideReplay = Setting.guideReplay.defaultValue
+
+    /// With Dark paper on, the paper is dark whenever the system is. Struck, it stays light.
+    @AppStorage(Setting.darkPaper.key) private var darkPaper = Setting.darkPaper.defaultValue
+
+    /// The working hours, and whether the page shows on the Lock Screen during them.
+    @AppStorage(Setting.workHours.key) private var workHours = Setting.workHours.defaultValue
+    @AppStorage(WorkHours.startKey) private var workStart = WorkHours.standard.start
+    @AppStorage(WorkHours.endKey) private var workEnd = WorkHours.standard.end
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        page
+            .preferredColorScheme(darkPaper ? nil : .light)
+            // Lists arriving from another device can bring a second life, work and home.
+            // The notice comes on a thread of its own, so it is taken on the main one.
+            .onReceive(
+                NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange).receive(on: RunLoop.main)
+            ) { _ in
+                try? context.mergeDuplicateDefaultLists()
+            }
+            // The widgets and the Live Activity show the list that is open, and
+            // catch up whenever the app comes forward or steps back.
+            .onChange(of: shownID, initial: true) { _, new in PageMirror.shared.current = new }
+            .onChange(of: scenePhase) { _, _ in
+                try? context.save()
+                PageMirror.shared.refresh()
+            }
+            .onChange(of: [workHours ? 1 : 0, workStart, workEnd]) { _, _ in PageMirror.shared.refresh() }
+            // A tap on a widget opens its list: sansserif://list/<id>.
+            .onOpenURL { url in
+                guard url.host() == "list", let id = UUID(uuidString: url.lastPathComponent),
+                      lists.contains(where: { $0.id == id })
+                else { return }
+                currentID = id.uuidString
+            }
+    }
+
+    /// The list on the page now.
+    private var shownID: UUID? {
+        (lists.first(where: { $0.id.uuidString == currentID }) ?? lists.first)?.id
+    }
+
+    @ViewBuilder private var page: some View {
+        if !lists.isEmpty, !guideDone || guideReplay {
+            // The first page teaches the app, and plays again from the Gestures line in settings.
+            GuideView(lists: lists, isReplay: guideDone) {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.3)) {
+                    guideDone = true
+                    guideReplay = false
+                }
+            }
+            .transition(.opacity)
+        } else if let current = lists.first(where: { $0.id.uuidString == currentID }) ?? lists.first {
+            PageView(list: current, lists: lists) { currentID = $0.id.uuidString }
+                // Shake on iPhone and Cmd+Z on Mac undo the last change, a deleted task included.
+                .onChange(of: undoManager, initial: true) { _, new in context.undoManager = new }
+        } else {
+            Color.paper.ignoresSafeArea()
+        }
+    }
+}
+
+#if DEBUG
+#Preview {
+    let container = try! PageStore.makeContainer(inMemory: true)
+    try! PageStore.seedDefaultListsIfNeeded(in: container.mainContext)
+    try! PageStore.seedSampleData(in: container.mainContext)
+    return ContentView().modelContainer(container)
+}
+#endif

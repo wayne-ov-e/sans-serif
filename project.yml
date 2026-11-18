@@ -1,0 +1,134 @@
+name: SansSerif
+options:
+  bundleIdPrefix: app
+  deploymentTarget:
+    iOS: "18.0"
+    macOS: "15.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "13"
+targets:
+  SansSerif:
+    type: application
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - App
+      - Design
+      - Model
+      - Page
+      - Shared
+      - Strike
+    dependencies:
+      - target: SansSerifWidgets
+        platformFilter: iOS
+    scheme:
+      testTargets:
+        - SansSerifTests
+        - SansSerifUITests
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: sans-serif
+        UILaunchScreen:
+          UIColorName: Paper
+        UIApplicationSupportsIndirectInputEvents: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        LSApplicationCategoryType: public.app-category.productivity
+        ITSAppUsesNonExemptEncryption: false
+        UIBackgroundModes:
+          - remote-notification
+        NSSupportsLiveActivities: true
+        CFBundleURLTypes:
+          - CFBundleURLName: app.sans-serif
+            CFBundleURLSchemes:
+              - sansserif
+    entitlements:
+      path: App/SansSerif.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        aps-environment: development
+        com.apple.developer.aps-environment: development
+        com.apple.developer.icloud-services:
+          - CloudKit
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.app.sans-serif
+        com.apple.security.application-groups:
+          - group.app.sans-serif
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.sans-serif
+        PRODUCT_NAME: SansSerif
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_PREVIEWS: YES
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 2AZVP8B6CH
+        # The Mac app has no widgets yet, and so no app group. Kept by hand.
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": App/SansSerifMac.entitlements
+  SansSerifWidgets:
+    type: app-extension
+    supportedDestinations: [iOS]
+    sources:
+      - Widgets
+      - Shared
+      - Strike/Stroke.swift
+      - Strike/StrikePath.swift
+      - Design/Ink.swift
+      - Model/Models.swift
+      - path: App/Assets.xcassets
+    info:
+      path: Widgets/Info.plist
+      properties:
+        CFBundleDisplayName: sans-serif
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: Widgets/SansSerifWidgets.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.app.sans-serif
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.sans-serif.widgets
+        PRODUCT_NAME: SansSerifWidgets
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 2AZVP8B6CH
+        SKIP_INSTALL: YES
+  SansSerifUITests:
+    type: bundle.ui-testing
+    supportedDestinations: [iOS]
+    sources:
+      - UITests
+    dependencies:
+      - target: SansSerif
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.sans-serif.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: SansSerif
+        DEVELOPMENT_TEAM: 2AZVP8B6CH
+  SansSerifTests:
+    type: bundle.unit-test
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - Tests
+    dependencies:
+      - target: SansSerif
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.sans-serif.tests
+        GENERATE_INFOPLIST_FILE: YES
