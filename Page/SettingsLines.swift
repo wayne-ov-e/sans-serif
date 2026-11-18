@@ -202,16 +202,16 @@ private struct HoursLine: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            HourWord(hour: hours.start, name: "Starts") {
+            HourWord(hour: hours.start, name: "Starts", which: .start) {
                 set(hours.steppingStart(by: $0))
             } typed: {
-                set(hours.typingStart($0))
+                set(hours.typingStart($0, afternoon: HourEntry.shared.afternoon))
             }
             Text("to").foregroundStyle(.inkFaded)
-            HourWord(hour: hours.end, name: "Ends") {
+            HourWord(hour: hours.end, name: "Ends", which: .end) {
                 set(hours.steppingEnd(by: $0))
             } typed: {
-                set(hours.typingEnd($0))
+                set(hours.typingEnd($0, afternoon: HourEntry.shared.afternoon))
             }
         }
         .typeStyle(.listName)
@@ -228,6 +228,7 @@ private struct HourWord: View {
     let hour: Int
     /// What VoiceOver calls it.
     let name: String
+    let which: HourEntry.Which
     /// Moves the hour on or back by a number of hours.
     let step: (Int) -> Void
     /// A number was typed for the hour.
@@ -262,6 +263,7 @@ private struct HourWord: View {
                 digits = ""
                 isTyping = true
                 isFocused = true
+                HourEntry.shared.begin(which)
             }
             .onHorizontalDrag { value in
                 let wanted = Int((value.translation.width / Self.perHour).rounded(.towardZero))
@@ -311,7 +313,12 @@ private struct HourWord: View {
                 }
             }
             .onChange(of: isFocused) { _, focused in if !focused { keep() } }
-            .onDisappear { if let number = Int(digits) { typed(number) } }
+            // "done", above the keys.
+            .onChange(of: HourEntry.shared.dones) { _, _ in keep() }
+            .onDisappear {
+                if let number = Int(digits) { typed(number) }
+                HourEntry.shared.end(which)
+            }
     }
 
     private func keep() {
@@ -321,5 +328,67 @@ private struct HourWord: View {
         isFocused = false
         digits = ""
         if let number { typed(number) }
+        HourEntry.shared.end(which)
+    }
+}
+
+/// The hour being typed, if one is. The words above the keys read it: they
+/// stand at the bottom of the page, apart from the settings lines.
+@MainActor
+@Observable
+final class HourEntry {
+    static let shared = HourEntry()
+
+    enum Which { case start, end }
+
+    private(set) var typing: Which?
+    /// The half of the day asked for with AM or PM while typing this hour.
+    var afternoon: Bool?
+    /// Counts presses of "done".
+    var dones = 0
+
+    func begin(_ which: Which) {
+        typing = which
+        afternoon = nil
+    }
+
+    func end(_ which: Which) {
+        guard typing == which else { return }
+        typing = nil
+        afternoon = nil
+    }
+}
+
+/// Above the number keys while an hour is typed: AM and PM to say which half
+/// of the day is meant, and "done". On a twenty-four-hour clock, only "done".
+struct HourEntryWords: View {
+    let which: HourEntry.Which
+
+    @AppStorage(WorkHours.startKey) private var start = WorkHours.standard.start
+    @AppStorage(WorkHours.endKey) private var end = WorkHours.standard.end
+
+    private var hours: WorkHours { WorkHours(start: start, end: end) }
+    private var isAfternoon: Bool { (which == .start ? hours.start : hours.end) >= 12 }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 28) {
+            if WorkHours.clockIsTwelveHour {
+                half(Calendar.current.amSymbol, afternoon: false)
+                half(Calendar.current.pmSymbol, afternoon: true)
+            }
+            Spacer(minLength: 0)
+            BottomWord(word: "done") { HourEntry.shared.dones += 1 }
+        }
+        .haptic(.selection, trigger: isAfternoon)
+    }
+
+    private func half(_ word: String, afternoon: Bool) -> some View {
+        BottomWord(word: word, isFaded: isAfternoon != afternoon) {
+            HourEntry.shared.afternoon = afternoon
+            let new = which == .start ? hours.start(afternoon: afternoon) : hours.end(afternoon: afternoon)
+            start = new.start
+            end = new.end
+        }
+        .accessibilityAddTraits(isAfternoon == afternoon ? .isSelected : [])
     }
 }

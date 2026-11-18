@@ -75,6 +75,20 @@ struct WorkHoursTests {
         #expect(hours.typingStart(99, twelveHour: false) == WorkHours(start: 22, end: 23))
     }
 
+    @Test func amAndPmMoveAnHourToTheOtherHalfOfTheDay() {
+        let hours = WorkHours(start: 9, end: 17)
+        #expect(hours.end(afternoon: false) == WorkHours(start: 9, end: 10))
+        #expect(WorkHours(start: 6, end: 9).end(afternoon: true) == WorkHours(start: 6, end: 21))
+        #expect(WorkHours(start: 6, end: 21).end(afternoon: false) == WorkHours(start: 6, end: 9))
+        // A start moved past the end takes the end along.
+        #expect(WorkHours(start: 6, end: 9).start(afternoon: true) == WorkHours(start: 18, end: 21))
+        #expect(WorkHours(start: 13, end: 17).start(afternoon: false) == WorkHours(start: 1, end: 17))
+        // A half that was asked for is kept when the number is typed after it.
+        #expect(WorkHours(start: 6, end: 21).typingEnd(8, afternoon: false, twelveHour: true) == WorkHours(start: 6, end: 8))
+        #expect(hours.typingEnd(8, afternoon: true, twelveHour: true) == WorkHours(start: 9, end: 20))
+        #expect(hours.typingStart(1, afternoon: true, twelveHour: true) == WorkHours(start: 13, end: 17))
+    }
+
     @Test func settingsKeepTheHours() throws {
         let defaults = try #require(UserDefaults(suiteName: "work-hours-test"))
         defaults.removePersistentDomain(forName: "work-hours-test")

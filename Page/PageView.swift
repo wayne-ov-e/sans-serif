@@ -19,6 +19,8 @@ struct PageView: View {
         case newTask
         /// A list name being rewritten.
         case listName(UUID)
+        /// The name of a list that is being added.
+        case newList
         /// Nothing is being written. With a keyboard attached the page itself
         /// listens, so that typing starts a task.
         case page
@@ -51,6 +53,13 @@ struct PageView: View {
     @State private var incomingCovers = false
     /// Counts turns, so that one cut short by the next does not finish twice.
     @State private var landings = 0
+    /// A page that was arriving when another list was asked for. It stands in
+    /// for the page while it leaves, so quick turns run into one another.
+    @State private var leaving: TaskList?
+    /// Where the turn is at this instant, while it animates.
+    @State private var turnProbe = TurnProbe()
+    /// A new list is being named, after the last name.
+    @State private var isNamingList = false
     /// The menu that is open, if any.
     @State private var menu: PageMenu?
     /// The list whose name is being rewritten.
@@ -82,11 +91,14 @@ struct PageView: View {
             showsHeader: showsSettings,
             contentReceded: menu?.listID != nil,
             footerReceded: menu?.taskID != nil,
+            footerStaysClear: keyboardIsUp && HourEntry.shared.typing != nil,
             scrollDisabled: isLifting,
             onTapPaper: tapPaper,
             turn: turnAmount,
             incomingSide: incoming == nil ? 0 : incomingSide,
             incomingCovers: incomingCovers,
+            leaving: leaving.map { AnyView(PagePreview(list: $0)) },
+            turnProbe: turnProbe,
             onTurnChanged: turnChanged,
             onTurnEnded: turnEnded,
             onPullPastEnd: pullPastEnd,
@@ -117,7 +129,10 @@ struct PageView: View {
         } incoming: {
             if let incoming { PagePreview(list: incoming) }
         } footer: {
-            if keyboardIsUp, renamingID == nil {
+            if keyboardIsUp, let which = HourEntry.shared.typing {
+                // A work hour is being typed in settings: AM, PM and done.
+                HourEntryWords(which: which)
+            } else if keyboardIsUp, renamingID == nil, !isNamingList {
                 // While writing, the list names make way for a way to stop.
                 BottomWord(word: "done") { focus = nil }
             } else {
@@ -131,6 +146,8 @@ struct PageView: View {
                 renamingID: $renamingID,
                 focus: $focus,
                 rename: { context.rename($0, to: $1) },
+                isNamingList: $isNamingList,
+                addList: addList,
                 openArchive: { showsArchive = true },
                 openSettings: { showsSettings = true }
             )
@@ -157,6 +174,7 @@ struct PageView: View {
             isLifting = false
             showsSettings = false
             menu = nil
+            isNamingList = false
         }
         .onChange(of: focus) { old, new in
             // Leaving the empty line keeps what was typed on it.
@@ -248,14 +266,30 @@ struct PageView: View {
     private func turn(to target: TaskList) {
         guard menu == nil else { return }
         if isLanding {
-            // A second name tapped while the page is still turning: the first
-            // turn is finished at once, and the next sets off from there.
-            guard target !== incoming, let current = finishLanding() else { return }
+            // A second name tapped while the page is still turning. Nothing
+            // jumps: the page that was arriving carries on from where it is,
+            // now as the one leaving, and the next comes in beside it.
+            guard let arriving = incoming, target !== arriving else { return }
+            let from = lists.firstIndex { $0 === arriving } ?? 0
+            let to = lists.firstIndex { $0 === target } ?? 0
+            // Whatever the first turn had still to do is no longer wanted.
+            landings += 1
+            let token = landings
+            var still = Transaction()
+            still.disablesAnimations = true
+            withTransaction(still) {
+                // Where the arriving page is at this instant, mid-turn.
+                turnAmount = incomingCovers ? 0 : turnProbe.value + CGFloat(incomingSide)
+                leaving = arriving
+                incoming = target
+                incomingSide = to > from ? 1 : -1
+                incomingCovers = false
+            }
             Task { @MainActor in
-                // One frame, so the page is drawn at rest before it moves again.
+                // One frame, so the pages are drawn where they stand before they move on.
                 try? await Task.sleep(for: .milliseconds(20))
-                guard !isLanding, turnAmount == 0 else { return }
-                begin(target, from: current)
+                guard token == landings else { return }
+                land(on: target)
             }
             return
         }
@@ -291,6 +325,7 @@ struct PageView: View {
             showsArchive = false
             showsSettings = false
             incoming = nil
+            leaving = nil
             incomingCovers = false
             isLanding = false
         }
@@ -360,6 +395,7 @@ struct PageView: View {
             select(target)
             turnAmount = 0
             incoming = nil
+            leaving = nil
             isLanding = false
         }
         guard !reduceMotion else {
@@ -378,6 +414,7 @@ struct PageView: View {
             swap.disablesAnimations = true
             withTransaction(swap) {
                 incomingCovers = true
+                leaving = nil
                 select(target)
                 turnAmount = 0
                 showsArchive = false
@@ -448,6 +485,10 @@ struct PageView: View {
             menu = nil
             renamingID = id
         }]
+        options.append(MenuOption(title: "New list") {
+            menu = nil
+            isNamingList = true
+        })
         // The last list cannot be deleted: there would be no page left.
         if lists.count > 1 {
             options.append(MenuOption(title: "Delete list", isDestructive: true) {
@@ -455,6 +496,14 @@ struct PageView: View {
             })
         }
         return options
+    }
+
+    /// A name was written for a new list: it is added after the last, and the page turns to it.
+    private func addList(named name: String) {
+        guard let new = try? context.addList(named: name), !isLanding else { return }
+        incoming = new
+        incomingSide = 1
+        land(on: new)
     }
 
     /// The question before a list is deleted is showing.

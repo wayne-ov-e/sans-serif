@@ -14,6 +14,9 @@ struct ListNames: View {
     @Binding var renamingID: UUID?
     var focus: FocusState<PageView.Field?>.Binding
     let rename: (TaskList, String) -> Void
+    /// A new list is being named, after the last name.
+    var isNamingList: Binding<Bool> = .constant(false)
+    var addList: ((String) -> Void)?
     /// A way to the archive without a drag, for VoiceOver and Switch Control.
     var openArchive: (() -> Void)?
     /// A way to settings without a drag.
@@ -41,10 +44,19 @@ struct ListNames: View {
                 .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.space)).minX } action: {
                     leadingEdges[list.id] = $0
                 }
+                .id(list.id)
+            }
+            if isNamingList.wrappedValue {
+                NewNameField(isNaming: isNamingList, focus: focus) { addList?($0) }
+                    .id(Self.newName)
+                    .transition(.opacity)
             }
         }
+        .animation(.quick, value: isNamingList.wrappedValue)
+        .modifier(NamesThatScroll(showing: isNamingList.wrappedValue ? AnyHashable(Self.newName) : AnyHashable(current?.id)))
         .coordinateSpace(.named(Self.space))
         // The menu stands on top of the names and grows upward from the one held.
+        // It is outside the sliding row, which would keep taps above it from landing.
         .overlay(alignment: .topLeading) {
             Color.clear
                 .frame(width: 0, height: 0)
@@ -60,6 +72,8 @@ struct ListNames: View {
         .animation(.quick, value: menuListID)
         .animation(.quick, value: menuOptions.map(\.id))
     }
+
+    private static let newName = "new list"
 
     private func name(_ list: TaskList) -> some View {
         let isCurrent = list === current
@@ -129,5 +143,61 @@ private struct NameField: View {
                 renamingID = nil
             }
             .accessibilityLabel("List name")
+    }
+}
+
+/// With more names than the page is wide, the row slides sideways, and keeps
+/// the current name in view. A row that fits does not move. Menus still grow
+/// out of it, above the names.
+private struct NamesThatScroll: ViewModifier {
+    let showing: AnyHashable
+
+    func body(content: Content) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
+                content
+            }
+            .scrollIndicators(.hidden)
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            // The gap around a name belongs to it, above and below the row too.
+            .scrollClipDisabled()
+            .onChange(of: showing, initial: true) { _, new in
+                withAnimation(.quick) { proxy.scrollTo(new, anchor: .trailing) }
+            }
+        }
+    }
+}
+
+/// The name of a new list, written after the last name. Left blank, no list is added.
+private struct NewNameField: View {
+    @Binding var isNaming: Bool
+    var focus: FocusState<PageView.Field?>.Binding
+    let add: (String) -> Void
+
+    @Environment(\.pageMetrics) private var metrics
+    @State private var text = ""
+
+    var body: some View {
+        TextField("", text: $text, prompt: Text("new list").foregroundStyle(.inkFaded))
+            .textFieldStyle(.plain)
+            .typeStyle(.listName)
+            .foregroundStyle(.ink)
+            .tint(.ink)
+            #if os(iOS)
+            .textInputAutocapitalization(.never)
+            .submitLabel(.done)
+            #endif
+            .fixedSize()
+            .frame(minWidth: 24, minHeight: metrics.minTouchHeight, alignment: .leading)
+            .focused(focus, equals: .newList)
+            .onAppear { focus.wrappedValue = .newList }
+            .onSubmit { focus.wrappedValue = nil }
+            .onChange(of: focus.wrappedValue) { old, new in
+                guard old == .newList, new != .newList else { return }
+                let name = text
+                isNaming = false
+                add(name)
+            }
+            .accessibilityLabel("New list name")
     }
 }

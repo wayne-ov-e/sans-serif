@@ -22,7 +22,8 @@ final class WalkthroughTests: XCTestCase {
         // Tap below and write your own.
         wait(for: "Tap below and write your own.")
         point(0.5, 0.6).tap()
-        type("Buy milk")
+        // The guide marks on the first page keep playing, so the app is never idle here.
+        type("Buy milk", inOneBurst: true)
         app.buttons["done"].tap()
         wait(for: "Buy milk")
 
@@ -120,7 +121,7 @@ final class WalkthroughTests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.8)
         // On the words themselves: the paper beside a short task starts a new one.
         app.buttons["Second"].coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
-        type(" thing")
+        type(" thing", inOneBurst: true)
         app.buttons["done"].tap()
         XCTAssertTrue(app.buttons["Second thing"].waitForExistence(timeout: 3), "an edit is kept")
 
@@ -176,6 +177,19 @@ final class WalkthroughTests: XCTestCase {
         wait(for: "Ends")
         XCTAssertNotEqual(line("Ends").value as? String, end, "a typed number becomes the hour")
         XCTAssertEqual(line("Ends").value as? String, WorkHours7PM.name, "7 after a morning start is 7 in the evening")
+        // AM and PM stand above the keys while an hour is typed.
+        line("Starts").tap()
+        XCTAssertTrue(app.buttons[Calendar.current.pmSymbol].waitForExistence(timeout: 3), "PM is above the keys")
+        app.buttons[Calendar.current.amSymbol].tap()
+        type("6")
+        wait(for: "Starts")
+        line("Ends").tap()
+        XCTAssertTrue(app.buttons[Calendar.current.amSymbol].waitForExistence(timeout: 3))
+        app.buttons[Calendar.current.amSymbol].tap()
+        app.buttons["done"].tap()
+        wait(for: "Ends")
+        XCTAssertEqual(line("Ends").value as? String, WorkHours7AM.name, "AM moves 7 PM to 7 AM")
+
         let start = line("Starts").value as? String
         let word = line("Starts").coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
         word.press(forDuration: 0.05, thenDragTo: word.withOffset(CGVector(dx: -60, dy: 0)))
@@ -274,10 +288,31 @@ final class WalkthroughTests: XCTestCase {
             app.buttons["life"].tap()
             XCTAssertTrue(app.buttons["One"].waitForExistence(timeout: 3), "round \(round): and back to life")
         }
+        // Hold a list name: New list. The name is written after the last, and the page turns to it.
+        app.buttons["home"].press(forDuration: 1)
+        XCTAssertTrue(app.buttons["New list"].waitForExistence(timeout: 3), "the list menu offers a new list")
+        app.buttons["New list"].tap()
+        type("trips\n")
+        XCTAssertTrue(app.buttons["trips"].waitForExistence(timeout: 3), "the new list is among the names")
+        XCTAssertTrue(gone(app.buttons["One"]), "the page has turned to the new list")
+        XCTAssertTrue(app.buttons["trips"].isSelected, "the new list is the one open")
+        // Left blank, no list is added.
+        app.buttons["trips"].press(forDuration: 1)
+        app.buttons["New list"].tap()
+        type("\n")
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label IN %@", ["life", "work", "home", "trips"])).count, 4)
+        app.buttons["life"].tap()
+        XCTAssertTrue(app.buttons["One"].waitForExistence(timeout: 3), "and the first list is still a tap away")
         XCTAssertEqual(app.state, .runningForeground)
     }
 
     // MARK: Helpers
+
+    private enum WorkHours7AM {
+        static var name: String {
+            (Calendar.current.date(bySettingHour: 7, minute: 0, second: 0, of: .now) ?? .now).formatted(.dateTime.hour())
+        }
+    }
 
     /// Seven in the evening, as this device writes hours.
     private enum WorkHours7PM {
@@ -292,10 +327,20 @@ final class WalkthroughTests: XCTestCase {
     }
 
     /// Types once the keyboard is up. Keys pressed while it is still rising are lost.
-    private func type(_ text: String) {
+    private func type(_ text: String, inOneBurst: Bool = false) {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "the keyboard should be up")
         Thread.sleep(forTimeInterval: 0.4)
-        app.typeText(text)
+        // One key at a time, as a person types. Sent as one burst, the last
+        // key was sometimes lost and "Two" was kept as "Tw".
+        // While a task is edited in place the app never reports its animations
+        // as finished, and each call waits a minute for that. There, one call.
+        guard !inOneBurst else {
+            app.typeText(text)
+            return
+        }
+        for character in text {
+            app.typeText(String(character))
+        }
     }
 
     /// Anything on the page that reads as `label`.

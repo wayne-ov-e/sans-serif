@@ -42,21 +42,42 @@ struct WorkHours: Equatable, Sendable {
     }
 
     /// A number typed for the start. On a twelve-hour clock, 1 to 12 keep the
-    /// half of the day the start is in now; 13 and up are taken as written.
-    /// The hours keep their length where the day has room for it.
-    func typingStart(_ number: Int, twelveHour: Bool = WorkHours.clockIsTwelveHour) -> WorkHours {
-        let hour = Self.hour(number, twelveHour: twelveHour, afternoon: start >= 12)
-        return WorkHours(start: hour, end: hour >= end ? hour + length : end)
+    /// half of the day the start is in now, or go to the half that was asked
+    /// for; 13 and up are taken as written. The hours keep their length where
+    /// the day has room for it.
+    func typingStart(
+        _ number: Int, afternoon: Bool? = nil, twelveHour: Bool = WorkHours.clockIsTwelveHour
+    ) -> WorkHours {
+        movingStart(to: Self.hour(number, twelveHour: twelveHour, afternoon: afternoon ?? (start >= 12)))
     }
 
     /// A number typed for the end. On a twelve-hour clock, 1 to 12 mean the
     /// first such hour after the start: with a start of 9 AM, 5 is 5 PM.
-    func typingEnd(_ number: Int, twelveHour: Bool = WorkHours.clockIsTwelveHour) -> WorkHours {
+    /// When a half of the day was asked for, it is that half.
+    func typingEnd(
+        _ number: Int, afternoon: Bool? = nil, twelveHour: Bool = WorkHours.clockIsTwelveHour
+    ) -> WorkHours {
         guard twelveHour, (1...12).contains(number) else {
             return WorkHours(start: start, end: min(max(number, 0), 23))
         }
         let morning = number % 12
+        if let afternoon {
+            return WorkHours(start: start, end: morning + (afternoon ? 12 : 0))
+        }
         return WorkHours(start: start, end: morning > start ? morning : morning + 12)
+    }
+
+    /// The same hour in the other half of the day: 9 AM to 9 PM and back.
+    func start(afternoon: Bool) -> WorkHours {
+        movingStart(to: start % 12 + (afternoon ? 12 : 0))
+    }
+
+    func end(afternoon: Bool) -> WorkHours {
+        WorkHours(start: start, end: end % 12 + (afternoon ? 12 : 0))
+    }
+
+    private func movingStart(to hour: Int) -> WorkHours {
+        WorkHours(start: hour, end: hour >= end ? hour + length : end)
     }
 
     private static func hour(_ number: Int, twelveHour: Bool, afternoon: Bool) -> Int {

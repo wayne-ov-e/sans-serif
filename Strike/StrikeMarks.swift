@@ -5,16 +5,19 @@ import SwiftUI
 /// `progress` counts lines: 0 is clean paper, 1 is the first line fully struck,
 /// 1.5 is half way through the second. Animating it draws the lines one after
 /// another, top to bottom, and lifts them in reverse.
-struct StrikeMarks: View, @preconcurrency Animatable {
+struct StrikeMarks: View, Animatable {
     var lines: [StrikeLine]
     var strokes: [Stroke]
-    var progress: Double
+    // SwiftUI may read and write an animated value on a thread of its own
+    // while it draws. Tied to the main actor, that read stops the app, so the
+    // value belongs to no actor.
+    nonisolated(unsafe) var progress: Double
     /// Ink on the live page, faded ink in the archive.
     var color: Color = .ink
 
     @Environment(\.colorScheme) private var colorScheme
 
-    var animatableData: Double {
+    nonisolated var animatableData: Double {
         get { progress }
         set { progress = newValue }
     }

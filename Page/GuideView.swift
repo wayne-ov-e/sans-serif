@@ -68,6 +68,7 @@ struct GuideView: View {
         PageColumn(
             showsArchive: showsArchive,
             showsHeader: showsSettings,
+            footerStaysClear: keyboardIsUp && HourEntry.shared.typing != nil,
             onTapPaper: tapPaper,
             turn: turnAmount,
             onTurnChanged: turnChanged,
@@ -83,7 +84,9 @@ struct GuideView: View {
         } incoming: {
             EmptyView()
         } footer: {
-            if keyboardIsUp {
+            if keyboardIsUp, let which = HourEntry.shared.typing {
+                HourEntryWords(which: which)
+            } else if keyboardIsUp {
                 BottomWord(word: "done") { isWriting = false }
             } else if step == .end {
                 BottomWord(word: "begin") { end(struck: true) }

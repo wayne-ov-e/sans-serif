@@ -22,6 +22,8 @@ struct PageColumn<Header: View, Content: View, Archive: View, Incoming: View, Fo
     /// A menu is open on the list names, or on a task: the other part of the page recedes.
     var contentReceded = false
     var footerReceded = false
+    /// The footer holds words for what is being typed in the header, and stays in reach.
+    var footerStaysClear = false
     /// The page holds still while a line is being carried.
     var scrollDisabled = false
     /// A tap on the paper that no line of text claimed, beside the column included.
@@ -34,6 +36,11 @@ struct PageColumn<Header: View, Content: View, Archive: View, Incoming: View, Fo
     /// The turn has landed: the incoming page lies exactly where the real one
     /// is about to be, and covers it until it has been laid out.
     var incomingCovers = false
+    /// A page that stands in for this one while it leaves: the page that was
+    /// arriving when another was asked for. The real page is hidden meanwhile.
+    var leaving: AnyView?
+    /// Told where the turn is on every frame of its animation.
+    var turnProbe: TurnProbe?
     /// A sideways drag that no task claimed, as a fraction of the page width.
     var onTurnChanged: ((CGFloat) -> Void)?
     /// The drag was let go: how far it went, and its speed in page widths per second.
@@ -84,6 +91,14 @@ struct PageColumn<Header: View, Content: View, Archive: View, Incoming: View, Fo
                             // The page coming in darkens to full ink as it arrives.
                             .opacity(incomingCovers ? 1 : 0.35 + 0.65 * min(abs(turn), 1))
                     }
+                    if let leaving {
+                        sheet(leaving, metrics: metrics, footerZone: footerZone, minHeight: minHeight)
+                            .scrollDisabled(true)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                            .offset(x: turn * width)
+                            .opacity(1 - 0.65 * min(abs(turn), 1))
+                    }
                     ZStack {
                     if showsArchive {
                         sheet(archive, metrics: metrics, footerZone: footerZone, minHeight: minHeight)
@@ -117,14 +132,15 @@ struct PageColumn<Header: View, Content: View, Archive: View, Incoming: View, Fo
                     }
                     // The page follows the finger and pales as it leaves.
                     .offset(x: turn * width)
-                    .opacity(incomingCovers ? 0 : 1 - 0.65 * min(abs(turn), 1))
+                    .opacity(incomingCovers || leaving != nil ? 0 : 1 - 0.65 * min(abs(turn), 1))
+                    .modifier(TurnReader(turn: turn, probe: turnProbe))
                 }
                 // The page runs to the bottom edge, underneath the list names.
                 .ignoresSafeArea(.container, edges: .bottom)
 
                 if showsFooter {
                     column(footer, metrics: metrics)
-                        .receded(showsHeader || footerReceded)
+                        .receded((showsHeader || footerReceded) && !footerStaysClear)
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
                         .padding(.bottom, bottomInset)
                         .transition(.opacity)
@@ -420,5 +436,29 @@ private struct Receded: ViewModifier {
             .opacity(isReceded ? 0.6 : 1)
             .allowsHitTesting(!isReceded)
             .accessibilityHidden(isReceded)
+    }
+}
+
+/// Where a turn is at this instant. An animated value only says where it is
+/// going, so the turn is read here on every frame as it is drawn.
+final class TurnProbe {
+    var value: CGFloat = 0
+}
+
+private struct TurnReader: ViewModifier, Animatable {
+    // SwiftUI reads and writes an animated value on a thread of its own while
+    // it draws. Tied to the main actor, that read stops the app (found by the
+    // UI tests on the first page). So the value itself belongs to no actor.
+    nonisolated(unsafe) var turn: CGFloat
+    let probe: TurnProbe?
+
+    nonisolated var animatableData: CGFloat {
+        get { turn }
+        set { turn = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        probe?.value = turn
+        return content
     }
 }
