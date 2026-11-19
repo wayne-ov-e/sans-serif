@@ -54,6 +54,30 @@ final class CloudSync {
         set { UserDefaults.standard.set(newValue, forKey: Self.nameKey) }
     }
 
+    private static let typedNameKey = "cloudSync.myNameTyped"
+
+    /// The user wrote their name themselves. iCloud's name for them does not replace it.
+    private(set) var nameIsTyped: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.typedNameKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.typedNameKey) }
+    }
+
+    /// The name the user gives themselves on shared lists: it stands by the
+    /// tasks they write and strike from now on. Blank, and iCloud's name for
+    /// them is used again, when it gives one.
+    func setName(_ typed: String) {
+        let name = Self.tidied(typed)
+        nameIsTyped = !name.isEmpty
+        myName = name.isEmpty ? nil : name
+    }
+
+    /// A name as it is kept: on one line, without space round it, and not
+    /// longer than fits beside a task.
+    nonisolated static func tidied(_ name: String) -> String {
+        let line = name.split(whereSeparator: \.isNewline).joined(separator: " ")
+        return String(line.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
+    }
+
     var isRunning: Bool { mine != nil }
 
     // MARK: Starting
@@ -123,7 +147,13 @@ final class CloudSync {
     /// are pushed to the app as well, but a push can take many seconds, and
     /// the system holds pushes back when there are many. With a shared list,
     /// someone else may be writing on it right now.
-    static let watchInterval: (shared: Duration, alone: Duration) = (.seconds(3), .seconds(20))
+    static let watchInterval: (shared: Duration, alone: Duration) = (.seconds(1), .seconds(20))
+    /// How long a change may wait to be saved. Nothing is sent until the store
+    /// is saved, and left to itself the store saves when it finds a moment,
+    /// which can be many seconds: that wait was most of the delay before
+    /// someone else saw a task (Wayne, on build 20).
+    static let saveInterval: Duration = .milliseconds(150)
+    private var saving: Task<Void, Never>?
 
     /// Sends what is waiting, now. Left to itself the engine sends when the
     /// system finds a good moment, which can be several seconds away.
@@ -132,7 +162,7 @@ final class CloudSync {
         sending?.cancel()
         sending = Task { @MainActor [weak self] in
             // A moment, so that a run of changes goes out together.
-            try? await Task.sleep(for: .milliseconds(300))
+            try? await Task.sleep(for: .milliseconds(100))
             guard !Task.isCancelled, let self else { return }
             for engine in [self.mine, self.theirs].compactMap({ $0 }) {
                 let state = engine.state
@@ -148,18 +178,47 @@ final class CloudSync {
     func watch(_ isOpen: Bool) {
         watching?.cancel()
         watching = nil
+        saving?.cancel()
+        saving = nil
         guard isOpen, mine != nil else { return }
+        saving = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.saveInterval)
+                guard let self, let context = self.context else { return }
+                // Saving is what queues a change and sends it. See `storeWillSave`.
+                if !self.isApplying, context.hasChanges { try? context.save() }
+            }
+        }
         watching = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 // A list shared by the user is in their own part of iCloud, and
                 // one shared with them is in the other: both are asked.
-                try? await self.theirs?.fetchChanges()
-                try? await self.mine?.fetchChanges()
-                let interval = self.lists().contains(where: \.isShared)
+                // Both at once: one after the other, the second waited for the first.
+                async let others = Self.asked(self.theirs)
+                async let own = Self.asked(self.mine)
+                let waits = await [others, own].compactMap { $0 }
+                var interval = self.lists().contains(where: \.isShared)
                     ? Self.watchInterval.shared : Self.watchInterval.alone
+                // iCloud asked for a pause, or could not be reached: it is given
+                // one, and not asked again every second in the meantime.
+                if let longest = waits.max() { interval = max(interval, .seconds(longest)) }
                 try? await Task.sleep(for: interval)
             }
+        }
+    }
+
+    /// Asks one engine for changes. Gives back how long to wait before asking
+    /// again, in seconds, when iCloud says to or cannot be reached.
+    private static func asked(_ engine: CKSyncEngine?) async -> Double? {
+        guard let engine else { return nil }
+        do {
+            try await engine.fetchChanges()
+            return nil
+        } catch let error as CKError {
+            return error.retryAfterSeconds ?? 5
+        } catch {
+            return 5
         }
     }
 
@@ -564,7 +623,8 @@ final class CloudSync {
     private func noteName(from share: CKShare) {
         guard let components = share.currentUserParticipant?.userIdentity.nameComponents else { return }
         let name = PersonNameComponentsFormatter.localizedString(from: components, style: .short)
-        if !name.isEmpty { myName = name }
+        // What the user wrote themselves stands.
+        if !name.isEmpty, !nameIsTyped { myName = name }
     }
 }
 
@@ -626,12 +686,13 @@ struct SharePerson: Identifiable, Equatable {
     }
 
     /// Everyone on a share: the owner first, then the rest by name.
-    static func people(on share: CKShare) -> [SharePerson] {
+    /// `myName` is what the user calls themselves, shown for them in place of iCloud's name.
+    static func people(on share: CKShare, myName: String? = nil) -> [SharePerson] {
         let me = share.currentUserParticipant.map(identity)
         return share.participants.map { participant in
             SharePerson(
                 id: identity(of: participant),
-                name: name(
+                name: identity(of: participant) == me && myName?.isEmpty == false ? myName ?? "" : name(
                     components: participant.userIdentity.nameComponents,
                     email: participant.userIdentity.lookupInfo?.emailAddress,
                     phone: participant.userIdentity.lookupInfo?.phoneNumber

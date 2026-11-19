@@ -34,6 +34,8 @@ struct ShareLines: View {
     /// People struck off and not yet gone from what iCloud says.
     @State private var struck: Set<String> = []
     @State private var changes = 0
+    /// Counts the times the user has changed their name here.
+    @State private var names = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: metrics.settingsGap) {
@@ -52,7 +54,8 @@ struct ShareLines: View {
                 if let link {
                     shared(link: link, people: people)
                 } else {
-                    note("Anyone you send the link to can read and write this list.")
+                    // Before there is a link, one thing to do and nothing else
+                    // (Wayne, Nov 19, 2026). The name and the rest come with the link.
                     word("Make a link") { Task { await makeLink() } }
                 }
             }
@@ -64,11 +67,21 @@ struct ShareLines: View {
         .animation(.quick, value: isConfirmingStop)
         .haptic(.pen, trigger: changes)
         .task(id: list.id) { await ask() }
+        // The user's own line reads as they have just named themselves.
+        .onChange(of: names) { _, _ in
+            guard case .known(let link, var people) = load, let me = people.firstIndex(where: \.isMe),
+                  let name = CloudSync.shared.myName, !name.isEmpty
+            else { return }
+            people[me].name = name
+            load = .known(link: link, people: people)
+        }
+        .environment(\.nameChanged) { names += 1 }
     }
 
     // MARK: Lines
 
     @ViewBuilder private func shared(link: URL, people: [SharePerson]) -> some View {
+        NameLine()
         ForEach(people) { person in
             PersonLine(
                 person: person,
@@ -78,7 +91,7 @@ struct ShareLines: View {
             )
         }
         if !list.isSomeoneElses {
-            if people.count < 2 { note("Nobody has joined yet.") }
+            if people.count < 2 { note("Anyone with the link can join and write.") }
             ShareLink(item: link, subject: Text(list.name), message: Text("Join my list, \(list.name)")) {
                 line("Send link")
             }
@@ -192,7 +205,10 @@ struct ShareLines: View {
         defer { isBusy = false }
         do {
             let share = try await share()
-            load = .known(link: share?.url, people: share.map(SharePerson.people) ?? [])
+            load = .known(
+                link: share?.url,
+                people: share.map { SharePerson.people(on: $0, myName: CloudSync.shared.myName) } ?? []
+            )
         } catch {
             load = .failed(Self.words(for: error))
         }
@@ -222,6 +238,90 @@ struct ShareLines: View {
             try? await Task.sleep(for: .seconds(2))
             copied = false
         }
+    }
+}
+
+private struct NameChangedKey: EnvironmentKey {
+    static let defaultValue: @MainActor () -> Void = {}
+}
+
+private extension EnvironmentValues {
+    var nameChanged: @MainActor () -> Void {
+        get { self[NameChangedKey.self] }
+        set { self[NameChangedKey.self] = newValue }
+    }
+}
+
+/// The name the user goes by on shared lists: "you are Wayne". It stands by
+/// the tasks they write and strike. A tap on it and it is typed where it
+/// stands. iCloud's name for them is there to begin with, when it gives one.
+private struct NameLine: View {
+    @Environment(\.nameChanged) private var nameChanged
+    @State private var name = CloudSync.shared.myName ?? ""
+    @State private var isTyping = false
+    @State private var draft = ""
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text("you are").foregroundStyle(.inkFaded)
+            if isTyping {
+                TextField("", text: $draft, prompt: Text("your name").foregroundStyle(.inkFaded))
+                    .textFieldStyle(.plain)
+                    .foregroundStyle(.ink)
+                    .tint(.ink)
+                    #if os(iOS)
+                    .textInputAutocapitalization(.words)
+                    .textContentType(.name)
+                    .submitLabel(.done)
+                    #endif
+                    .autocorrectionDisabled()
+                    .padding(.vertical, 6)
+                    .focused($isFocused)
+                    .onSubmit(keep)
+                    .onChange(of: isFocused) { _, focused in if !focused { keep() } }
+                    // "done", above the keys.
+                    .onChange(of: HourEntry.shared.dones) { _, _ in keep() }
+                    .onDisappear { HourEntry.shared.isWritingElsewhere = false }
+                    .accessibilityLabel("Your name")
+            } else {
+                Text(name.isEmpty ? "add your name" : name)
+                    .foregroundStyle(name.isEmpty ? .inkFaded : .ink)
+                    .lineLimit(1)
+                    // Pencil dots under a word that can be changed, as in settings.
+                    .underline(pattern: .dot, color: .inkFaded)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle().inset(by: -6))
+                    .onTapGesture {
+                        draft = name
+                        HourEntry.shared.isWritingElsewhere = true
+                        isTyping = true
+                        isFocused = true
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Your name")
+                    .accessibilityValue(name.isEmpty ? "Not set" : name)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityHint("Tap to write the name others see by your tasks")
+            }
+        }
+        .typeStyle(.listName)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // iCloud may give a name a moment after the lines appear.
+        .task {
+            try? await Task.sleep(for: .seconds(1.5))
+            if !isTyping, name.isEmpty { name = CloudSync.shared.myName ?? "" }
+        }
+    }
+
+    private func keep() {
+        guard isTyping else { return }
+        isTyping = false
+        isFocused = false
+        HourEntry.shared.isWritingElsewhere = false
+        CloudSync.shared.setName(draft)
+        name = CloudSync.shared.myName ?? ""
+        nameChanged()
     }
 }
 

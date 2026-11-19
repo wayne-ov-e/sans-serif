@@ -413,6 +413,9 @@ final class HourEntry {
     var afternoon: Bool?
     /// Counts presses of "done".
     var dones = 0
+    /// Something else that is not a line of the page is being typed, such as
+    /// the user's name on the share lines. The page leaves the keys with it.
+    var isWritingElsewhere = false
 
     func begin(_ which: Which) {
         typing = which

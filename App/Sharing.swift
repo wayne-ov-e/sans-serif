@@ -6,6 +6,15 @@ import UIKit
 /// that arrives at a scene delegate, so the app has one, for this only.
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(
+        _ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        // iCloud tells the app of a change with a push the user never sees.
+        // That is the quickest word of it there is, and the app asks to be told.
+        application.registerForRemoteNotifications()
+        return true
+    }
+
+    func application(
         _ application: UIApplication, configurationForConnecting session: UISceneSession,
         options: UIScene.ConnectionOptions
     ) -> UISceneConfiguration {

@@ -552,3 +552,14 @@ struct SharePeopleTests {
         #expect(person("a", me: true, waiting: true).note == "you")
     }
 }
+
+@Suite("The name the user goes by")
+struct OwnNameTests {
+    @Test(arguments: [
+        ("  Wayne  ", "Wayne"), ("Wayne\nXu", "Wayne Xu"), ("", ""), ("   \n ", ""), ("🧺", "🧺"),
+        (String(repeating: "a", count: 90), String(repeating: "a", count: 40)),
+    ])
+    func aNameIsKeptOnOneLineTrimmedAndNotTooLong(pair: (String, String)) {
+        #expect(CloudSync.tidied(pair.0) == pair.1)
+    }
+}

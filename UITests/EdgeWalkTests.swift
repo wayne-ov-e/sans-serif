@@ -179,6 +179,66 @@ final class EdgeWalkTests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground)
     }
 
+    /// The lines for sharing a list, with sample people in place of iCloud:
+    /// the user's name is typed and kept, a link is made, and stopping asks first.
+    func testTheShareLinesAndTheUsersOwnName() {
+        app.terminate()
+        app.launchArguments = ["-inMemoryStore", "-previewShare"]
+        app.launch()
+        skipTheFirstPage()
+
+        app.buttons["life"].press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Share"].waitForExistence(timeout: 3), "the list menu offers sharing")
+        app.buttons["Share"].tap()
+        wait(for: "Share life")
+        wait(for: "Make a link")
+        XCTAssertFalse(first("Show counts").exists, "these are not the settings")
+        XCTAssertFalse(first("Your name").exists, "before there is a link there is one thing to do")
+
+        // A link is made, and the people on the list are named.
+        line("Make a link").tap()
+        wait(for: "Send link")
+        wait(for: "Ada Lovelace")
+        XCTAssertEqual(app.buttons["ben@example.com"].value as? String, "invited")
+        XCTAssertTrue(gone(first("Make a link")))
+
+        // The name the user goes by: typed where it stands, and kept.
+        XCTAssertEqual(line("Your name").value as? String, "Not set")
+        line("Your name").tap()
+        type("Wayne\n")
+        wait(for: "Your name")
+        XCTAssertEqual(line("Your name").value as? String, "Wayne", "the name is kept")
+        // Typed again and left blank, it is as if it had never been given.
+        line("Your name").tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        for _ in 0..<5 { app.typeText(XCUIKeyboardKey.delete.rawValue) }
+        // "done" above the keys, not the key of the same name on the keyboard.
+        let dones = app.buttons.matching(identifier: "done").allElementsBoundByIndex
+        dones.min { $0.frame.minY < $1.frame.minY }?.tap()
+        wait(for: "Your name")
+        XCTAssertEqual(line("Your name").value as? String, "Not set", "a blank name is no name")
+        Thread.sleep(forTimeInterval: 0.8)
+
+        line("Copy link").tap()
+        wait(for: "Copied")
+
+        // Stopping asks first, and Keep sharing changes nothing.
+        line("Stop sharing").tap()
+        wait(for: "Yes, stop sharing")
+        line("Keep sharing").tap()
+        XCTAssertTrue(gone(first("Yes, stop sharing")))
+        wait(for: "Stop sharing")
+        wait(for: "Ada Lovelace")
+
+        // A tap on the page puts the lines away, and settings are settings again.
+        point(0.5, 0.92).tap()
+        XCTAssertTrue(gone(first("Share life")), "a tap on the page puts sharing away")
+        drag(from: (0.5, 0.4), to: (0.5, 0.65))
+        wait(for: "Show counts")
+        XCTAssertFalse(first("Share life").exists, "pulling down brings settings, not sharing")
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
     // MARK: Helpers
 
     private func skipTheFirstPage() {

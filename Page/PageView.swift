@@ -94,7 +94,7 @@ struct PageView: View {
             showsArchive: showsArchive,
             showsHeader: showsSettings,
             contentReceded: menu?.listID != nil,
-            footerStaysClear: keyboardIsUp && HourEntry.shared.typing != nil,
+            footerStaysClear: keyboardIsUp && keysAreElsewhere,
             scrollDisabled: isLifting,
             onTapPaper: tapPaper,
             turn: CGFloat(index(of: list)) - place,
@@ -154,8 +154,12 @@ struct PageView: View {
             } else if keyboardIsUp, renamingID == nil, !isNamingList {
                 // While writing, the list names make way for a way to stop.
                 // On the right, above the keyboard's own return key, where the thumb already is.
-                BottomWord(word: "done") { focus = nil }
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                BottomWord(word: "done") {
+                    focus = nil
+                    // And for a field that is not the page's own.
+                    if HourEntry.shared.isWritingElsewhere { HourEntry.shared.dones += 1 }
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
             } else {
             ListNames(
                 lists: lists,
@@ -215,10 +219,10 @@ struct PageView: View {
             // Not while an hour is typed in settings: that field is not one
             // of the page's own, and taking the keys back here took them from
             // it, so with a keyboard attached an hour could not be typed at all.
-            if new == nil, Self.hasKeyboard, HourEntry.shared.typing == nil { focus = .page }
+            if new == nil, Self.hasKeyboard, !keysAreElsewhere { focus = .page }
         }
-        .onChange(of: HourEntry.shared.typing) { _, typing in
-            if typing == nil, focus == nil, Self.hasKeyboard { focus = .page }
+        .onChange(of: keysAreElsewhere) { _, elsewhere in
+            if !elsewhere, focus == nil, Self.hasKeyboard { focus = .page }
         }
         .onAppear { if Self.hasKeyboard { focus = .page } }
         .background {
@@ -555,6 +559,11 @@ struct PageView: View {
               let task = (list.tasks ?? []).first(where: { $0.id == id }), let who = task.addedBy
         else { return nil }
         return "Added by \(who)"
+    }
+
+    /// An hour or a name is being typed in the lines above the page.
+    private var keysAreElsewhere: Bool {
+        HourEntry.shared.typing != nil || HourEntry.shared.isWritingElsewhere
     }
 
     /// Brings down the lines for sharing a list, where settings stand.
