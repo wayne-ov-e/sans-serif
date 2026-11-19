@@ -4,6 +4,10 @@ import SwiftUI
 @main
 struct SansSerifApp: App {
     private let container: ModelContainer
+    #if os(iOS)
+    /// Hears an invitation to a shared list being opened.
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    #endif
 
     init() {
         do {
@@ -16,32 +20,47 @@ struct SansSerifApp: App {
                 SharedPage.shared.reset()
             }
             WorkHoursActivity.isAllowed = !isTest
-            #if DEBUG
             let arguments = ProcessInfo.processInfo.arguments
-            if arguments.contains("-initCloudKitSchema") || arguments.contains("-printCloudKitSchema") {
-                do {
-                    try PageStore.initializeCloudKitSchema(printOnly: arguments.contains("-printCloudKitSchema"))
-                    print("CloudKit schema initialised for \(PageStore.cloudContainer)")
-                } catch {
-                    print("CloudKit schema could not be initialised: \(error)")
-                }
-            }
-            #endif
             // The iCloud sync line in settings. Struck, the lists stay on this device.
             // It is read once, here: a change takes effect the next time the app opens.
+            #if DEBUG
+            // A development build talks to iCloud's development side, and the
+            // lists on a real device belong to the production side. So it only
+            // syncs when asked to, and then with a store of its own.
+            let syncs = arguments.contains("-syncInDevelopment")
+            let storeName: String? = syncs ? "development" : nil
+            #else
             let syncs = UserDefaults.standard.object(forKey: Setting.iCloudSync.key) as? Bool
                 ?? Setting.iCloudSync.defaultValue
-            container = try PageStore.makeContainer(inMemory: isTest, syncs: syncs)
+            let storeName: String? = nil
+            #endif
+            container = try PageStore.makeContainer(inMemory: isTest, named: storeName)
             let context = container.mainContext
             try PageStore.seedDefaultListsIfNeeded(in: context)
             try context.mergeDuplicateDefaultLists()
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("-seedSampleData") {
+            if arguments.contains("-seedSampleData") {
                 try PageStore.seedSampleData(in: context)
+            }
+            #endif
+            #if DEBUG
+            // iCloud learns a field the first time a record uses it, and only on
+            // its development side. This writes one task with every field filled
+            // in, so that the layout is whole before it is deployed to production.
+            if syncs, arguments.contains("-fillCloudSchema"), let first = try context.lists().first,
+               let task = context.addTask("Every field, for iCloud's schema", to: first) {
+                task.struckDate = .now
+                task.strokeData = Stroke.encode(Stroke.generated(lines: 1, seed: 1))
+                task.struckBy = "schema"
+                task.addedBy = "schema"
+                task.circledDate = .now
+                try context.save()
             }
             #endif
             // The widgets and the Live Activity follow the page from here on.
             PageMirror.shared.start(context: context)
+            // And iCloud, for the user's other devices and for shared lists.
+            if syncs, !isTest { CloudSync.shared.start(context: context) }
         } catch {
             fatalError("Could not open the store: \(error)")
         }

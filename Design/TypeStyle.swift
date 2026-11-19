@@ -11,8 +11,12 @@ import AppKit
 enum TypeStyle {
     /// Tasks and settings lines.
     case task
-    /// List names and menu options.
+    /// List names.
     case listName
+    /// The words of a menu: what can be done with a held task or a held list
+    /// name. A size below the list names, so they read as actions and not as
+    /// more names (Wayne, Nov 18, 2026).
+    case action
     /// Raised number after a list name.
     case count
     /// Archive month headings, italic.
@@ -25,6 +29,7 @@ enum TypeStyle {
         switch self {
         case .task: metrics.taskSize
         case .listName: metrics.listNameSize
+        case .action: metrics.listNameSize - 3
         case .count: metrics.countSize
         case .monthLabel: metrics.monthLabelSize
         }
@@ -56,7 +61,7 @@ private struct TypeStyleModifier: ViewModifier {
     private var size: CGFloat {
         let scale: CGFloat = switch style {
         case .task: taskScale
-        case .listName: listNameScale
+        case .listName, .action: listNameScale
         case .count: countScale
         case .monthLabel: monthLabelScale
         }

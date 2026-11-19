@@ -106,7 +106,10 @@ extension TaskItem {
     }
 }
 
-private extension UUID {
+extension UUID {
+    /// The seed of the loop drawn round a circled task.
+    var loopSeed: UInt64 { hashValueStable &* 31 &+ 17 }
+
     /// A hash that is the same on every launch and every device.
     var hashValueStable: UInt64 {
         withUnsafeBytes(of: uuid) { bytes in

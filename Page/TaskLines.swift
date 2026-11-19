@@ -75,8 +75,10 @@ struct TaskLines: View {
                     // The carried line, and the line with a menu, lie over the others.
                     .zIndex(isCarried || menuTaskID == task.id ? 1 : 0)
                     // The other lines step aside. The carried one follows the finger.
-                    .animation(isCarried ? nil : .shuffle, value: carried?.to)
-                    .animation(.settle, value: isCarried)
+                    // Not over a line that is being edited: an animation laid over a
+                    // text field keeps it from ever coming to rest.
+                    .animation(isCarried || editingID == task.id ? nil : .shuffle, value: carried?.to)
+                    .animation(editingID == task.id ? nil : .settle, value: isCarried)
                     .onLiftDrag(isEnabled: task.isLive && editingID != task.id) {
                         pickUp(task, at: index)
                     } onChanged: { translation in

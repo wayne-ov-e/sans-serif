@@ -10,7 +10,7 @@ import SwiftUI
 /// The content scrolls when it is taller than the page, and runs on underneath
 /// the list names, where lines marked `fadesUnderListNames()` blur and fade.
 /// A page that fits does not move.
-struct PageColumn<Header: View, Content: View, Archive: View, Incoming: View, Footer: View>: View {
+struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: View {
     /// Which page this is. A new page starts at its top and fades in over the old one.
     var pageID: AnyHashable = 0
     /// Hidden while the keyboard is up.
@@ -31,16 +31,15 @@ struct PageColumn<Header: View, Content: View, Archive: View, Incoming: View, Fo
     /// How far the page has been turned, as a fraction of its width: -1 is
     /// fully off to the left, 1 fully off to the right.
     var turn: CGFloat = 0
-    /// The side the incoming page waits on: 1 for the right, -1 for the left, 0 for none.
-    var incomingSide = 0
-    /// The turn has landed: the incoming page lies exactly where the real one
+    /// The other lists' pages, standing beside this one in a row. They are
+    /// always there, off the edge of the paper, so a turn has nothing to wait for.
+    var strip: [StripPage] = []
+    /// A turn has landed: the page turned to lies exactly where the real one
     /// is about to be, and covers it until it has been laid out.
-    var incomingCovers = false
-    /// A page that stands in for this one while it leaves: the page that was
-    /// arriving when another was asked for. The real page is hidden meanwhile.
-    var leaving: AnyView?
-    /// Told where the turn is on every frame of its animation.
-    var turnProbe: TurnProbe?
+    var stripCovers = false
+    /// A sideways drag turns the page wherever it starts. Off, only one that
+    /// starts at the bottom of the page does.
+    var turnsAnywhere = false
     /// A sideways drag that no task claimed, as a fraction of the page width.
     var onTurnChanged: ((CGFloat) -> Void)?
     /// The drag was let go: how far it went, and its speed in page widths per second.
@@ -54,8 +53,6 @@ struct PageColumn<Header: View, Content: View, Archive: View, Incoming: View, Fo
     @ViewBuilder var content: Content
     /// What is done. It lies below the page: it comes up from the bottom edge.
     @ViewBuilder var archive: Archive
-    /// The page being turned to, beside this one while it turns.
-    @ViewBuilder var incoming: Incoming
     @ViewBuilder var footer: Footer
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -82,23 +79,6 @@ struct PageColumn<Header: View, Content: View, Archive: View, Incoming: View, Fo
                     // its content by that much, which is taken off here.
                     let minHeight = viewport.size.height - viewport.safeAreaInsets.bottom - scrollTopInset(insets)
                     let width = viewport.size.width
-                    if incomingSide != 0 {
-                        sheet(incoming, metrics: metrics, footerZone: footerZone, minHeight: minHeight)
-                            .scrollDisabled(true)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                            .offset(x: incomingCovers ? 0 : (turn + CGFloat(incomingSide)) * width)
-                            // The page coming in darkens to full ink as it arrives.
-                            .opacity(incomingCovers ? 1 : 0.35 + 0.65 * min(abs(turn), 1))
-                    }
-                    if let leaving {
-                        sheet(leaving, metrics: metrics, footerZone: footerZone, minHeight: minHeight)
-                            .scrollDisabled(true)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                            .offset(x: turn * width)
-                            .opacity(1 - 0.65 * min(abs(turn), 1))
-                    }
                     ZStack {
                     if showsArchive {
                         sheet(archive, metrics: metrics, footerZone: footerZone, minHeight: minHeight)
@@ -132,8 +112,16 @@ struct PageColumn<Header: View, Content: View, Archive: View, Incoming: View, Fo
                     }
                     // The page follows the finger and pales as it leaves.
                     .offset(x: turn * width)
-                    .opacity(incomingCovers || leaving != nil ? 0 : 1 - 0.65 * min(abs(turn), 1))
-                    .modifier(TurnReader(turn: turn, probe: turnProbe))
+                    .opacity(stripCovers ? 0 : 1 - 0.65 * min(abs(turn), 1))
+                    // Each other page darkens to full ink as it comes to the middle.
+                    ForEach(strip) { page in
+                        sheet(page.view, metrics: metrics, footerZone: footerZone, minHeight: minHeight)
+                            .scrollDisabled(true)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                            .offset(x: page.x * width)
+                            .opacity(1 - 0.65 * min(abs(page.x), 1))
+                    }
                 }
                 // The page runs to the bottom edge, underneath the list names.
                 .ignoresSafeArea(.container, edges: .bottom)
@@ -151,11 +139,11 @@ struct PageColumn<Header: View, Content: View, Archive: View, Incoming: View, Fo
             // Higher up, a sideways drag belongs to the lines: it strikes.
             .contentShape(Rectangle())
             .onHorizontalDrag(followsScroll: true) { value in
-                guard value.startLocation.y >= proxy.size.height - footerZone - Self.turnZoneSlack else { return }
+                guard turnsAnywhere || value.startLocation.y >= proxy.size.height - footerZone - Self.turnZoneSlack else { return }
                 // Once the page is turning it follows the finger, wherever the finger wanders.
                 onTurnChanged?(value.translation.width / max(proxy.size.width, 1))
             } onEnded: { value in
-                guard value.startLocation.y >= proxy.size.height - footerZone - Self.turnZoneSlack else { return }
+                guard turnsAnywhere || value.startLocation.y >= proxy.size.height - footerZone - Self.turnZoneSlack else { return }
                 let width = max(proxy.size.width, 1)
                 onTurnEnded?(value.translation.width / width, value.velocity.width / width)
             }
@@ -439,26 +427,10 @@ private struct Receded: ViewModifier {
     }
 }
 
-/// Where a turn is at this instant. An animated value only says where it is
-/// going, so the turn is read here on every frame as it is drawn.
-final class TurnProbe {
-    var value: CGFloat = 0
-}
-
-private struct TurnReader: ViewModifier, Animatable {
-    // SwiftUI reads and writes an animated value on a thread of its own while
-    // it draws. Tied to the main actor, that read stops the app (found by the
-    // UI tests on the first page). So the value itself belongs to no actor.
-    nonisolated(unsafe) var turn: CGFloat
-    let probe: TurnProbe?
-
-    nonisolated var animatableData: CGFloat {
-        get { turn }
-        set { turn = newValue }
-    }
-
-    func body(content: Content) -> some View {
-        probe?.value = turn
-        return content
-    }
+/// Another list's page in the row of pages.
+struct StripPage: Identifiable {
+    let id: AnyHashable
+    /// Where it stands, in page widths from the middle of the paper.
+    let x: CGFloat
+    let view: AnyView
 }

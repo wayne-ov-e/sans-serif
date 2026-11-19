@@ -33,9 +33,17 @@ final class WalkthroughTests: XCTestCase {
         XCTAssertTrue(app.buttons["Copy"].waitForExistence(timeout: 3), "holding a line opens its menu")
         app.buttons["Copy"].tap()
 
-        // Swipe along the bottom for the next list.
+        // Circle what matters: from the menu here, since a test cannot draw a loop.
+        wait(for: "Circle what matters.")
+        line("Circle what matters.").press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Circle"].waitForExistence(timeout: 3), "the menu offers a circle")
+        app.buttons["Circle"].tap()
+
+        // Swipe along the bottom for the next list: the page turns to it, and back.
         wait(for: "Swipe along the bottom for the next list.")
-        drag(from: (0.8, 0.92), to: (0.2, 0.92))
+        XCTAssertTrue(app.buttons["work"].waitForExistence(timeout: 3), "the list names show during the swipe")
+        drag(from: (0.8, 0.94), to: (0.2, 0.94))
+        drag(from: (0.2, 0.94), to: (0.8, 0.94))
 
         // Pull up for what is done, and come back.
         wait(for: "Pull up for what is done.")
@@ -121,7 +129,7 @@ final class WalkthroughTests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.8)
         // On the words themselves: the paper beside a short task starts a new one.
         app.buttons["Second"].coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
-        type(" thing", inOneBurst: true)
+        type(" thing")
         app.buttons["done"].tap()
         XCTAssertTrue(app.buttons["Second thing"].waitForExistence(timeout: 3), "an edit is kept")
 
@@ -279,6 +287,18 @@ final class WalkthroughTests: XCTestCase {
         point(0.5, 0.6).tap()
         XCTAssertTrue(gone(app.buttons["Delete"]))
 
+        // Circle from the menu: this is the one that matters. And clear it the same way.
+        app.buttons["One"].coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["Circle"].waitForExistence(timeout: 3), "the task menu offers a circle")
+        app.buttons["Circle"].tap()
+        XCTAssertTrue(gone(app.buttons["Circle"]))
+        XCTAssertEqual(app.buttons["One"].value as? String, "Circled")
+        app.buttons["One"].coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["Uncircle"].waitForExistence(timeout: 3), "a circled task can be uncircled")
+        app.buttons["Uncircle"].tap()
+        XCTAssertTrue(gone(app.buttons["Uncircle"]))
+        XCTAssertNotEqual(app.buttons["One"].value as? String, "Circled")
+
         // Names tapped one after another, without waiting for the page.
         for round in 1...3 {
             app.buttons["work"].tap()
@@ -288,16 +308,16 @@ final class WalkthroughTests: XCTestCase {
             app.buttons["life"].tap()
             XCTAssertTrue(app.buttons["One"].waitForExistence(timeout: 3), "round \(round): and back to life")
         }
-        // Hold a list name: New list. The name is written after the last, and the page turns to it.
-        app.buttons["home"].press(forDuration: 1)
-        XCTAssertTrue(app.buttons["New list"].waitForExistence(timeout: 3), "the list menu offers a new list")
-        app.buttons["New list"].tap()
+        // Hold the empty paper beside the list names: a new list is named there.
+        let names = app.buttons["home"].frame.midY / app.frame.height
+        point(0.9, names).press(forDuration: 1)
         type("trips\n")
         XCTAssertTrue(app.buttons["trips"].waitForExistence(timeout: 3), "the new list is among the names")
         XCTAssertTrue(gone(app.buttons["One"]), "the page has turned to the new list")
         XCTAssertTrue(app.buttons["trips"].isSelected, "the new list is the one open")
-        // Left blank, no list is added.
+        // The list name menu offers the same. Left blank, no list is added.
         app.buttons["trips"].press(forDuration: 1)
+        XCTAssertTrue(app.buttons["New list"].waitForExistence(timeout: 3), "the list menu offers a new list")
         app.buttons["New list"].tap()
         type("\n")
         XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label IN %@", ["life", "work", "home", "trips"])).count, 4)

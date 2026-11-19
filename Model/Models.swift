@@ -16,8 +16,15 @@ final class TaskList {
     /// Position in the row of list names, ascending.
     var order: Double = 0
     var createdDate: Date = Date.now
-    /// Shared or private. Always private until step 11.
+    /// Shared with other people, by the user or with the user.
     var isShared: Bool = false
+    /// Whose list it is in iCloud. Empty for the user's own lists. For a list
+    /// someone else shared, the owner's iCloud name, which is where it is kept.
+    var zoneOwner: String?
+    /// The link people were invited with, once the list has been shared.
+    var shareURL: String?
+    /// What iCloud last said about the list's record. See `RecordCoder`.
+    var recordData: Data?
 
     /// Live and struck tasks together. Deleting a list removes its tasks and archive.
     @Relationship(deleteRule: .cascade, inverse: \TaskItem.list)
@@ -44,6 +51,13 @@ final class TaskItem {
     var strokeData: Data?
     /// Who struck the task, for shared lists.
     var struckBy: String?
+    /// Set when the task is circled: the one that matters. Circled tasks come
+    /// first in the widgets. Empty when it is not circled.
+    var circledDate: Date?
+    /// What iCloud last said about the task's record. See `RecordCoder`.
+    var recordData: Data?
+    /// Who wrote the task, for shared lists. Empty for tasks written before lists could be shared.
+    var addedBy: String?
 
     var list: TaskList?
 
@@ -54,4 +68,5 @@ final class TaskItem {
     }
 
     var isLive: Bool { struckDate == nil }
+    var isCircled: Bool { circledDate != nil }
 }

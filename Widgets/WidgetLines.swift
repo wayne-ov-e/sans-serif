@@ -29,9 +29,22 @@ struct WidgetTask: View {
             .lineLimit(1)
             // Task text can be hidden on a locked device, if the user asks for that.
             .privacySensitive()
+            // The pen line is always there, behind a cover that opens from the
+            // left when the task is struck. A widget cannot run a drawing of its
+            // own: it can only move from one state to the next, and a cover
+            // opening is a move it knows how to make. A line that simply
+            // appeared with the strike was shown at once, with no drawing at all.
             .overlay {
-                if !line.isLive { WidgetStrike(seed: line.id.seed, size: size, ink: ink) }
+                WidgetStrike(seed: line.id.seed, size: size, ink: ink)
+                    .mask {
+                        Rectangle()
+                            // Room for the line's run-up and its overshoot.
+                            .padding(.horizontal, -16)
+                            .padding(.vertical, -6)
+                            .scaleEffect(x: line.isLive ? 0 : 1, anchor: .leading)
+                    }
             }
+            .animation(.easeOut(duration: line.isLive ? 0.2 : 0.4), value: line.isLive)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .accessibilityLabel(line.text)

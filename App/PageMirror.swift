@@ -18,7 +18,9 @@ extension ModelContext {
                 return PageSnapshot.List(
                     id: list.id,
                     name: list.name,
-                    lines: shown.prefix(PageSnapshot.linesPerList).map {
+                    // Circled tasks come first, in the order they were circled. The rest keep page order.
+                    lines: (shown.filter(\.isCircled).sorted { ($0.circledDate ?? .distantPast) < ($1.circledDate ?? .distantPast) }
+                        + shown.filter { !$0.isCircled }).prefix(PageSnapshot.linesPerList).map {
                         PageSnapshot.Line(id: $0.id, text: $0.text, struck: $0.struckDate)
                     },
                     left: tasks.count(where: \.isLive)

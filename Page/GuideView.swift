@@ -11,16 +11,16 @@ struct GuideView: View {
     let isReplay: Bool
     let finish: () -> Void
 
-    /// The lines, in order. "Circle what matters." waits for the circle gesture,
-    /// which comes with the widgets.
+    /// The lines, in order.
     enum Step: Int, CaseIterable {
-        case cross, write, hold, swipe, pullUp, pullDown, end
+        case cross, write, hold, circle, swipe, pullUp, pullDown, end
 
         var line: String {
             switch self {
             case .cross: "Cross me off."
             case .write: "Tap below and write your own."
             case .hold: "Hold a line for more."
+            case .circle: "Circle what matters."
             case .swipe: "Swipe along the bottom for the next list."
             case .pullUp: "Pull up for what is done."
             case .pullDown: "Pull down for settings."
@@ -34,7 +34,8 @@ struct GuideView: View {
             case .cross: "Drag across the line to strike it."
             case .write: "Tap the empty paper and write a task."
             case .hold: "Hold a line to open its menu, then put the menu away."
-            case .swipe: "Swipe sideways along the bottom of the page."
+            case .circle: "Draw a loop round the line, or hold it and choose Circle."
+            case .swipe: "Swipe sideways along the bottom of the page to the next list, then swipe back."
             case .pullUp: "Drag up to see what is done, then drag down to come back."
             case .pullDown: "Drag down to see settings, then drag up to come back."
             case .end: "Tap begin."
@@ -58,7 +59,16 @@ struct GuideView: View {
     @State private var showsSettings = false
     /// The line whose menu is open: a step, or -1 for the user's own task.
     @State private var menuLine: Int?
-    @State private var turnAmount: CGFloat = 0
+    /// Where the row of two pages is: 0 is this page, 1 the next list's.
+    @State private var position: CGFloat = 0
+    /// The next list's page is the one showing.
+    @State private var isOnNext = false
+    @State private var hasSeenNext = false
+    @State private var isDraggingTurn = false
+    /// "Circle what matters." has its loop.
+    @State private var isCircled = false
+    /// Counted for the haptic of a page turned.
+    @State private var turnTaps = 0
     /// Counted for the haptic of a step crossed off.
     @State private var steps = 0
 
@@ -70,7 +80,9 @@ struct GuideView: View {
             showsHeader: showsSettings,
             footerStaysClear: keyboardIsUp && HourEntry.shared.typing != nil,
             onTapPaper: tapPaper,
-            turn: turnAmount,
+            turn: -position,
+            // The next list's page stands beside this one for the swipe, as in the app.
+            strip: step == .swipe ? [StripPage(id: "next", x: 1 - position, view: AnyView(nextPage))] : [],
             onTurnChanged: turnChanged,
             onTurnEnded: turnEnded,
             onPullPastEnd: pullPastEnd,
@@ -81,25 +93,45 @@ struct GuideView: View {
             lines
         } archive: {
             archive
-        } incoming: {
-            EmptyView()
         } footer: {
             if keyboardIsUp, let which = HourEntry.shared.typing {
                 HourEntryWords(which: which)
+            } else if menuLine != nil {
+                MenuRow(options: menuOptions)
             } else if keyboardIsUp {
                 BottomWord(word: "done") { isWriting = false }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             } else if step == .end {
                 BottomWord(word: "begin") { end(struck: true) }
+            } else if step == .swipe {
+                // The list names, as on the page: the one that is open is in ink,
+                // and a tap on a name turns to it as a swipe does.
+                HStack(alignment: .firstTextBaseline, spacing: metrics.listNameGap) {
+                    ForEach(Array(listNames.enumerated()), id: \.offset) { index, name in
+                        Button { go(toNext: index == 1) } label: {
+                            Text(name)
+                                .typeStyle(.listName)
+                                .foregroundStyle((index == 1) == isOnNext ? .ink : .inkFaded)
+                                .frame(minHeight: metrics.minTouchHeight)
+                                .contentShape(Rectangle().inset(by: -metrics.listNameGap / 2))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Spacer(minLength: 0)
+                    BottomWord(word: "skip", isFaded: true) { end(struck: false) }
+                }
+                .animation(.quick, value: isOnNext)
+                // The swipe is made down here, along the names.
+                .overlay(alignment: .top) {
+                    if !hasSeenNext { GuideGesture(kind: .sideways).offset(y: -40) }
+                }
             } else {
                 BottomWord(word: "skip", isFaded: true) { end(struck: false) }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    // The swipe for the next list is made down here, beside the names.
-                    .overlay {
-                        if step == .swipe { GuideGesture(kind: .sideways).padding(.leading, 56) }
-                    }
             }
         }
         .haptic(.pen, trigger: steps)
+        .haptic(.turn, trigger: turnTaps)
         .haptic(.pen, trigger: menuLine) { $0 != nil }
         .sheetHaptics(showsArchive)
         .sheetHaptics(showsSettings)
@@ -151,9 +183,14 @@ struct GuideView: View {
             seed: each.seed,
             strikesByDrag: isActive && each == .cross,
             showsRing: isActive && each == .hold && menuLine == nil,
-            onStruckByDrag: { complete(.cross, felt: true) }
+            circlesByDrag: isActive && each == .circle,
+            isCircled: each == .circle && isCircled,
+            onStruckByDrag: { complete(.cross, felt: true) },
+            onCircled: circle
         )
-        .holdable(id: each.rawValue, isEnabled: step == .hold, menuLine: $menuLine, options: menuOptions)
+        .holdable(
+            id: each.rawValue, isEnabled: step == .hold || step == .circle, menuLine: $menuLine, options: menuOptions
+        )
         .fadesUnderListNames()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(each.line)
@@ -171,7 +208,9 @@ struct GuideView: View {
             .foregroundStyle(.ink)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
-            .holdable(id: Self.ownLine, isEnabled: step == .hold, menuLine: $menuLine, options: menuOptions)
+            .holdable(
+                id: Self.ownLine, isEnabled: step == .hold || step == .circle, menuLine: $menuLine, options: menuOptions
+            )
             .fadesUnderListNames()
             .transition(.opacity)
     }
@@ -212,13 +251,34 @@ struct GuideView: View {
         .padding(.bottom, metrics.taskGap)
     }
 
-    /// The menu a held line opens. Here every line of it only puts the menu away.
+    /// The menu a held line opens. Here every line of it only puts the menu
+    /// away, but Circle: that one does what the circle line asks for.
     private var menuOptions: [MenuOption] {
         [
             MenuOption(title: "Move to") { closeMenu() },
             MenuOption(title: "Copy") { closeMenu() },
+            MenuOption(title: "Circle") {
+                closeMenu()
+                circle()
+            },
             MenuOption(title: "Delete", isDestructive: true) { closeMenu() },
         ]
+    }
+
+    /// The names at the bottom of the page for the swipe: the user's first two lists.
+    private var listNames: [String] {
+        let names = lists.prefix(2).map(\.name)
+        return names + ["life", "work"].suffix(2 - names.count)
+    }
+
+    /// The next list's page, as the swipe finds it: one line, saying how to come back.
+    private var nextPage: some View {
+        VStack(alignment: .leading, spacing: metrics.taskGap) {
+            Text("Swipe back, or tap \(listNames[0]).")
+                .typeStyle(.task)
+                .foregroundStyle(.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     // MARK: Doing what the lines say
@@ -228,6 +288,17 @@ struct GuideView: View {
         guard step == done, let next = Step(rawValue: done.rawValue + 1) else { return }
         if !felt { steps += 1 }
         step = next
+    }
+
+    /// The circle line has its loop. It is left to be seen for a moment before the line is struck.
+    private func circle() {
+        guard step == .circle, !isCircled else { return }
+        isCircled = true
+        steps += 1
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(0.9))
+            complete(.circle, felt: true)
+        }
     }
 
     private func closeMenu() {
@@ -257,16 +328,44 @@ struct GuideView: View {
         complete(.write)
     }
 
-    /// There is no next list yet, so the page gives and comes back.
+    /// The swipe turns to the next list's page and back, as it does in the app.
     private func turnChanged(_ amount: CGFloat) {
         guard step == .swipe, menuLine == nil else { return }
-        turnAmount = amount * 0.5
+        guard isDraggingTurn || abs(amount) > 0.03 else { return }
+        isDraggingTurn = true
+        var wanted = (isOnNext ? 1 : 0) - amount.clamped(to: -1...1)
+        // There are two pages here and no more: past either, the row only gives a little.
+        if wanted < 0 { wanted *= 0.2 }
+        if wanted > 1 { wanted = 1 + (wanted - 1) * 0.2 }
+        position = wanted
     }
 
     private func turnEnded(_ amount: CGFloat, _ speed: CGFloat) {
-        guard step == .swipe else { return }
-        withAnimation(reduceMotion ? nil : .settle) { turnAmount = 0 }
-        if abs(amount) > 0.15 { complete(.swipe) }
+        guard isDraggingTurn else { return }
+        isDraggingTurn = false
+        // Far enough, or a quick flick the same way.
+        let flicked = abs(amount) > 0.05 && speed * amount > 0 && abs(speed) > 1.2
+        let turns = abs(amount) > 0.35 || flicked
+        if turns, !isOnNext, amount < 0 {
+            go(toNext: true)
+        } else if turns, isOnNext, amount > 0 {
+            go(toNext: false)
+        } else {
+            withAnimation(reduceMotion ? nil : .settle) { position = isOnNext ? 1 : 0 }
+        }
+    }
+
+    /// Turns to the next list's page, or back. Back from it, the line is done.
+    private func go(toNext next: Bool) {
+        guard step == .swipe, next != isOnNext else { return }
+        isOnNext = next
+        if next { hasSeenNext = true }
+        if !PenHaptics.shared.snap() { turnTaps += 1 }
+        withAnimation(reduceMotion ? nil : .turn) {
+            position = next ? 1 : 0
+        } completion: {
+            if !isOnNext, hasSeenNext { complete(.swipe, felt: true) }
+        }
     }
 
     private func pullPastEnd() {
@@ -315,11 +414,6 @@ private extension View {
                 menuLine.wrappedValue = id
             } onChanged: { _ in
             } onEnded: {
-            }
-            .overlay(alignment: .bottomLeading) {
-                Color.clear.frame(width: 0, height: 0).overlay(alignment: .topLeading) {
-                    if isHeld { TextMenu(options: options).padding(.top, 12) }
-                }
             }
             .receded(menuLine.wrappedValue != nil && !isHeld)
             .zIndex(isHeld ? 1 : 0)

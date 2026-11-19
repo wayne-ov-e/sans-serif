@@ -26,6 +26,8 @@ struct ListNames: View {
     @AppStorage(Setting.showCounts.key) private var showCounts = Setting.showCounts.defaultValue
     /// Where each name starts, so a menu can line up with the name it grows from.
     @State private var leadingEdges: [UUID: CGFloat] = [:]
+    /// How wide the row of names may be before it slides.
+    @State private var rowWidth: CGFloat = 0
 
     private nonisolated static let space = "names"
 
@@ -50,10 +52,25 @@ struct ListNames: View {
                 NewNameField(isNaming: isNamingList, focus: focus) { addList?($0) }
                     .id(Self.newName)
                     .transition(.opacity)
+            } else if addList != nil {
+                // The empty paper beside the names. A hold here starts a new
+                // list where the next name would stand.
+                Color.clear
+                    // As tall as a name and no taller: left to itself it would take the whole page.
+                    .frame(minWidth: metrics.minTouchHeight, maxWidth: .infinity)
+                    .frame(height: metrics.minTouchHeight)
+                    .contentShape(Rectangle())
+                    .onLongPressGesture(minimumDuration: Lift.holdDuration + 0.15) {
+                        if menuListID == nil, renamingID == nil { isNamingList.wrappedValue = true }
+                    }
+                    .accessibilityHidden(true)
             }
         }
+        // The row is at least as wide as the page, so the empty paper reaches its far edge.
+        .frame(minWidth: rowWidth, alignment: .leading)
         .animation(.quick, value: isNamingList.wrappedValue)
         .modifier(NamesThatScroll(showing: isNamingList.wrappedValue ? AnyHashable(Self.newName) : AnyHashable(current?.id)))
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
         .coordinateSpace(.named(Self.space))
         // The menu stands on top of the names and grows upward from the one held.
         // It is outside the sliding row, which would keep taps above it from landing.
@@ -81,6 +98,10 @@ struct ListNames: View {
         let inInk = menuListID == nil ? isCurrent : menuListID == list.id
         return HStack(alignment: .top, spacing: metrics.countGap) {
             Text(list.name).typeStyle(.listName)
+            // A small raised plus: this list is shared with other people.
+            if list.isShared {
+                Text("+").typeStyle(.count)
+            }
             if showCounts {
                 Text("\(list.liveCount)").typeStyle(.count)
             }
@@ -94,7 +115,8 @@ struct ListNames: View {
         .onSecondaryClick { openMenu?(list) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(list.name)
-        .accessibilityValue(showCounts ? "\(list.liveCount) left" : "")
+        .accessibilityValue([list.isShared ? "Shared" : nil, showCounts ? "\(list.liveCount) left" : nil]
+            .compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(isCurrent ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { select(list) }
         .accessibilityAction(named: "Show archive") {

@@ -13,7 +13,8 @@ struct BottomWord: View {
     var body: some View {
         Button(action: action) {
             Text(word)
-                .typeStyle(isFaded ? .monthLabel : .listName)
+                // A size below the list names: these are things to do, not places to go.
+                .typeStyle(isFaded ? .monthLabel : .action)
                 .foregroundStyle(isFaded ? .inkFaded : .ink)
                 .frame(minWidth: metrics.minTouchHeight, minHeight: metrics.minTouchHeight, alignment: .leading)
                 // The paper on either side belongs to the word, so it is easy to hit.

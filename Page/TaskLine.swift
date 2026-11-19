@@ -30,7 +30,8 @@ struct TaskLine: View {
     var strikeColor: Color = .ink
     /// Opens the task's menu, for VoiceOver and Switch Control.
     var showMenu: (() -> Void)?
-    /// The lines of this task's menu while it is open. It floats beside the task, over the page.
+    /// The lines of this task's menu while it is open. They are shown at the bottom of the
+    /// page; here they only mean the task is held, and is not edited or struck meanwhile.
     var menu: [MenuOption]?
     /// The task a keyboard shortcut has asked to strike, once it is back on the page as text.
     var pendingStrikeID: Binding<UUID?> = .constant(nil)
@@ -58,12 +59,15 @@ struct TaskLine: View {
     @State private var progress = 0.0
     @State private var drag: Drag?
     @State private var commits = 0
-    @State private var rowWidth: CGFloat = 0
-    /// The bottom of the line in the page, to tell whether a menu has room below.
-    @State private var bottomInPage: CGFloat = 0
-    @Environment(\.listNamesTop) private var listNamesTop
+    /// How much of the loop round the task is drawn, from 0 to 1.
+    @State private var circled = 0.0
+    @State private var circles = 0
+    /// Where the finger has been, while a drag that began as a strike turns into a loop.
+    @State private var loop: [CGPoint] = []
+    /// The loop set off to the right, as a strike does.
+    @State private var loopBeganAsStrike = false
 
-    private enum Drag { case striking, undoing, ignored }
+    private enum Drag { case striking, undoing, circling, ignored }
 
     private var field: PageView.Field { .task(task.id) }
     private var lineCount: Int { max(lines.count, 1) }
@@ -91,6 +95,7 @@ struct TaskLine: View {
                         let measured = StrikeLine.measure(layouts, in: proxy)
                         StrikeMarks(lines: measured, strokes: strokes, progress: progress, color: strikeColor)
                             .onChange(of: measured, initial: true) { _, new in linesChanged(new) }
+                        CircleMark(lines: measured, seed: task.id.loopSeed, progress: circled, color: strikeColor)
                     }
                 }
                 .contentShape(Rectangle())
@@ -99,21 +104,14 @@ struct TaskLine: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
                 .onHorizontalDrag(onChanged: dragChanged, onEnded: dragEnded)
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
-                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(PageSpace.name)).maxY } action: {
-                    bottomInPage = $0
+                // The loop is drawn when the task is circled and lifted when it is not,
+                // wherever the change came from: the menu, a drawn loop, another device.
+                .onChange(of: task.isCircled, initial: true) { old, new in
+                    let animates = old != new && !reduceMotion
+                    withAnimation(animates ? .easeOut(duration: new ? 0.42 : 0.2) : nil) { circled = new ? 1 : 0 }
+                    if old != new, new { circles += 1 }
                 }
-                .overlay(alignment: menuCorner) {
-                    // A point on the line's corner that the menu hangs from, so it
-                    // takes no room and nothing on the page moves.
-                    Color.clear.frame(width: 0, height: 0).overlay(alignment: menuHangs) {
-                        if let menu {
-                            TextMenu(options: menu)
-                                .padding(.vertical, menuFitsBeside ? 3 : Self.menuGapBelow)
-                                .offset(x: menuFitsBeside ? textWidth + Self.menuGap : 0)
-                        }
-                    }
-                }
+                .haptic(.pen, trigger: circles)
                 .animation(.easeOut(duration: 0.25), value: task.isLive)
                 .haptic(.drag, trigger: ticks)
                 .haptic(.release, trigger: releases)
@@ -122,42 +120,15 @@ struct TaskLine: View {
                 .haptic(.lift, trigger: undos)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(task.text)
-                .accessibilityValue(task.isLive ? "" : "Struck")
+                .accessibilityValue(task.isLive ? (task.isCircled ? "Circled" : "") : "Struck")
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction { if task.isLive { editingID = task.id } }
                 .accessibilityAction(named: task.isLive ? "Strike" : "Undo strike") {
                     task.isLive ? strikeWithoutDrag() : undo()
                 }
+                .accessibilityAction(named: task.isCircled ? "Clear circle" : "Circle") { context.toggleCircle(task) }
                 .accessibilityAction(named: "Show menu") { showMenu?() }
         }
-    }
-
-    // MARK: Menu
-
-    private static let menuGap: CGFloat = 24
-    /// Between a long task and the menu below it.
-    private static let menuGapBelow: CGFloat = 12
-    /// Room a menu needs: its widest line, and its three lines.
-    private static let menuWidth: CGFloat = 120
-    private static let menuHeight: CGFloat = 120
-
-    private var textWidth: CGFloat { lines.map(\.maxX).max() ?? 0 }
-
-    /// The menu sits to the right of the text when there is room for it.
-    private var menuFitsBeside: Bool { textWidth + Self.menuGap + Self.menuWidth <= rowWidth }
-
-    /// Near the bottom of the page the menu grows upward, clear of the list names.
-    private var menuGrowsUp: Bool { bottomInPage + Self.menuHeight > (listNamesTop ?? .infinity) }
-
-    /// Beside the text: level with it. With no room beside: below the task,
-    /// on its left edge, or above it when growing upward.
-    private var menuCorner: Alignment {
-        if menuFitsBeside { return menuGrowsUp ? .bottomLeading : .topLeading }
-        return menuGrowsUp ? .topLeading : .bottomLeading
-    }
-
-    private var menuHangs: Alignment {
-        menuGrowsUp ? .bottomLeading : .topLeading
     }
 
     // MARK: Editing
@@ -199,6 +170,17 @@ struct TaskLine: View {
         }
 
         switch drag {
+        case .striking where abs(value.translation.height) > Self.loopRise:
+            // The pen has left the line: this is a loop round the task, not a
+            // strike. The line that was begun is taken back.
+            drag = .circling
+            loopBeganAsStrike = true
+            loop = [value.startLocation, value.location]
+            isArmed = false
+            PenHaptics.shared.stop()
+            retract()
+        case .circling:
+            loop.append(value.location)
         case .striking:
             // An Apple Pencil's pressure sets how thick the line is.
             if let pressure = value.pressure, !strokes.isEmpty {
@@ -239,6 +221,13 @@ struct TaskLine: View {
                 speed: run
             )
             strokes = [first] + Stroke.generated(lines: lineCount, seed: seed).dropFirst()
+        } else if task.isLive, value.translation.width < 0 {
+            // A drag to the left on a live task strikes nothing, so it can only
+            // be the start of a loop, drawn the other way round.
+            drag = .circling
+            loopBeganAsStrike = false
+            loop = [value.startLocation, value.location]
+            actions.dragBegan()
         } else if !task.isLive, value.translation.width < 0 {
             drag = .undoing
             land()
@@ -251,8 +240,9 @@ struct TaskLine: View {
 
     private func dragEnded(_ value: HorizontalDragValue) {
         defer {
-            if drag == .striking || drag == .undoing { actions.dragEnded() }
+            if drag == .striking || drag == .undoing || drag == .circling { actions.dragEnded() }
             drag = nil
+            loop = []
         }
         guard let line = lines.first else { return }
 
@@ -278,9 +268,44 @@ struct TaskLine: View {
                 draw(to: Double(lineCount))
                 actions.resumeHold(task)
             }
+        case .circling:
+            // Round the words: the task is circled, or its circle cleared.
+            if Self.closes(loop + [value.location]) {
+                context.toggleCircle(task)
+            } else if loopBeganAsStrike, value.translation.width >= min((line.maxX - line.minX) * 0.4, 90) {
+                // Not a loop after all, only a strike that wandered off the line. It still counts.
+                strikeWithoutDrag()
+            }
         case .ignored, nil:
             PenHaptics.shared.stop()
         }
+    }
+
+    /// How far above or below the line the pen must go before a strike becomes a loop.
+    static let loopRise: CGFloat = 14
+
+    /// Whether a path goes round the words: it went both across and up or
+    /// down, and either came back near where it began or went most of the way
+    /// round. Made easy on purpose (Wayne, Nov 18, 2026): a rough loop counts.
+    static func closes(_ path: [CGPoint]) -> Bool {
+        guard let first = path.first, let last = path.last, path.count >= 4 else { return false }
+        let width = (path.map(\.x).max() ?? 0) - (path.map(\.x).min() ?? 0)
+        let height = (path.map(\.y).max() ?? 0) - (path.map(\.y).min() ?? 0)
+        guard width >= 36, height >= loopRise * 0.8 else { return false }
+        let gap = hypot(last.x - first.x, last.y - first.y)
+        if gap <= max(48, width * 0.45) { return true }
+        // Or most of the way round its own middle, either way, without meeting.
+        let middle = CGPoint(
+            x: path.map(\.x).reduce(0, +) / CGFloat(path.count), y: path.map(\.y).reduce(0, +) / CGFloat(path.count)
+        )
+        var turned = 0.0
+        for (from, to) in zip(path, path.dropFirst()) {
+            var step = atan2(to.y - middle.y, to.x - middle.x) - atan2(from.y - middle.y, from.x - middle.x)
+            if step > .pi { step -= 2 * .pi }
+            if step < -.pi { step += 2 * .pi }
+            turned += step
+        }
+        return abs(turned) >= 1.4 * .pi
     }
 
     /// How far a drag back has come, from 0 to 1.

@@ -41,25 +41,30 @@ struct PageView: View {
     @State private var showsArchive = false
     /// Settings are showing above the page.
     @State private var showsSettings = false
-    /// The list being turned to, while the page turns.
-    @State private var incoming: TaskList?
-    /// The side it comes from: 1 for the right, -1 for the left.
-    @State private var incomingSide = 0
-    /// How far the page has turned, as a fraction of its width.
-    @State private var turnAmount: CGFloat = 0
-    /// The turn is finishing by itself. The list names already show where it is going.
-    @State private var isLanding = false
+    /// The pages stand in a row, one per list. This is where the row is, in
+    /// pages: 1 is the second list in the middle of the paper. At rest it is
+    /// the open list's own place. One value moves for a swipe, a tap and a
+    /// second tap that comes before the first has landed, so quick turns keep
+    /// their speed and run into one another.
+    @State private var position: CGFloat = 0
+    /// The row is moving, under a finger or by itself.
+    @State private var isTurning = false
+    /// A finger is moving the row.
+    @State private var isDraggingTurn = false
+    /// The list the row is heading for. The list names already show it.
+    @State private var heading: TaskList?
     /// The page turned to is on screen, and the real one is being laid out under it.
-    @State private var incomingCovers = false
+    @State private var stripCovers = false
     /// Counts turns, so that one cut short by the next does not finish twice.
-    @State private var landings = 0
-    /// A page that was arriving when another list was asked for. It stands in
-    /// for the page while it leaves, so quick turns run into one another.
-    @State private var leaving: TaskList?
-    /// Where the turn is at this instant, while it animates.
-    @State private var turnProbe = TurnProbe()
+    @State private var turns = 0
     /// A new list is being named, after the last name.
     @State private var isNamingList = false
+    /// Something the app has to say, shown where the list names are for a moment.
+    @State private var notice: String?
+    #if os(iOS)
+    /// The share sheet is up for this list.
+    @State private var sharing: ListShare?
+    #endif
     /// The menu that is open, if any.
     @State private var menu: PageMenu?
     /// The list whose name is being rewritten.
@@ -90,15 +95,12 @@ struct PageView: View {
             showsArchive: showsArchive,
             showsHeader: showsSettings,
             contentReceded: menu?.listID != nil,
-            footerReceded: menu?.taskID != nil,
             footerStaysClear: keyboardIsUp && HourEntry.shared.typing != nil,
             scrollDisabled: isLifting,
             onTapPaper: tapPaper,
-            turn: turnAmount,
-            incomingSide: incoming == nil ? 0 : incomingSide,
-            incomingCovers: incomingCovers,
-            leaving: leaving.map { AnyView(PagePreview(list: $0)) },
-            turnProbe: turnProbe,
+            turn: CGFloat(index(of: list)) - place,
+            strip: strip,
+            stripCovers: stripCovers,
             onTurnChanged: turnChanged,
             onTurnEnded: turnEnded,
             onPullPastEnd: pullPastEnd,
@@ -126,19 +128,31 @@ struct PageView: View {
             )
         } archive: {
             ArchiveLines(list: list, focus: $focus)
-        } incoming: {
-            if let incoming { PagePreview(list: incoming) }
         } footer: {
+            Group {
             if keyboardIsUp, let which = HourEntry.shared.typing {
                 // A work hour is being typed in settings: AM, PM and done.
                 HourEntryWords(which: which)
+            } else if let notice {
+                Button { self.notice = nil } label: {
+                    Text(notice)
+                        .typeStyle(.monthLabel)
+                        .foregroundStyle(.inkFaded)
+                        .frame(maxWidth: .infinity, minHeight: metrics.minTouchHeight, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+            } else if case .task(_, let moving) = menu {
+                // A task is held: what can be done with it stands where the list names were.
+                MenuRow(options: taskMenuOptions, label: moving ? "Move to" : nil, note: moving ? nil : menuNote)
             } else if keyboardIsUp, renamingID == nil, !isNamingList {
                 // While writing, the list names make way for a way to stop.
+                // On the right, above the keyboard's own return key, where the thumb already is.
                 BottomWord(word: "done") { focus = nil }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             } else {
             ListNames(
                 lists: lists,
-                current: isLanding ? incoming ?? list : list,
+                current: heading ?? list,
                 select: turn,
                 menuListID: menu?.listID,
                 menuOptions: listMenuOptions,
@@ -152,10 +166,21 @@ struct PageView: View {
                 openSettings: { showsSettings = true }
             )
             }
+            }
+            // The row of words changes with a short fade. Only the row: an
+            // animation laid over the whole page reaches the text fields too.
+            .animation(.quick, value: menu?.taskID)
+            .animation(.quick, value: notice)
         }
         // Turning to a list: a swipe ticks where letting go will turn the page.
         // Then, for a swipe or a tap on a name, one short crisp haptic at the
         // instant the page sets off.
+        #if os(iOS)
+        .sheet(item: $sharing) { item in
+            ShareSheet(item: item).ignoresSafeArea()
+        }
+        #endif
+        .haptic(.pen, trigger: isNamingList) { $0 }
         .haptic(.selection, trigger: turnArms)
         .haptic(.turn, trigger: turnTaps)
         // The archive and settings, coming and going, are felt the same way.
@@ -166,7 +191,12 @@ struct PageView: View {
         .haptic(.pen, trigger: copies)
         .haptic(.warning, trigger: isConfirmingDelete) { $0 }
         .haptic(.pen, trigger: menu?.listID) { $0 != nil }
+        // At rest the row stands at the open list. Lists can be added, removed and reordered.
+        .onChange(of: lists.map(\.id), initial: true) {
+            if !isTurning { position = CGFloat(index(of: list)) }
+        }
         .onChange(of: list.id) {
+            if !isTurning { position = CGFloat(index(of: list)) }
             // What was held or half done belongs to the page that was left.
             held = [:]
             isCrossing = false
@@ -212,7 +242,7 @@ struct PageView: View {
     }
 
     private func strike(_ task: TaskItem, with strokes: [Stroke]) {
-        context.strike(task, strokeData: Stroke.encode(strokes))
+        context.strike(task, strokeData: Stroke.encode(strokes), by: list.isShared ? CloudSync.shared.myName : nil)
         startHold(task)
     }
 
@@ -243,6 +273,13 @@ struct PageView: View {
 
     private func crossingBegan() {
         isCrossing = true
+        // The page had begun to follow the same drag: it lets go.
+        if isDraggingTurn {
+            isDraggingTurn = false
+            isTurning = false
+            isTurnArmed = false
+            position = CGFloat(index(of: list))
+        }
         // Whatever was about to leave waits.
         holds += 1
         for id in held.keys where held[id] != Self.paused { held[id] = holds }
@@ -262,173 +299,160 @@ struct PageView: View {
         held[task.id] = nil
     }
 
+    // MARK: Turning
+
+    private func index(of list: TaskList) -> Int {
+        lists.firstIndex { $0 === list } ?? 0
+    }
+
+    /// Where the row of pages is now.
+    private var place: CGFloat {
+        isTurning ? position : CGFloat(index(of: list))
+    }
+
+    /// Every other list's page, beside this one. While a landed page covers
+    /// the real one, this list's is among them.
+    private var strip: [StripPage] {
+        lists.enumerated().compactMap { index, other in
+            guard stripCovers || other !== list else { return nil }
+            return StripPage(id: other.id, x: CGFloat(index) - place, view: AnyView(PagePreview(list: other)))
+        }
+    }
+
     /// A list name was tapped. It always leads to that list's page, its own included.
     private func turn(to target: TaskList) {
         guard menu == nil else { return }
-        if isLanding {
-            // A second name tapped while the page is still turning. Nothing
-            // jumps: the page that was arriving carries on from where it is,
-            // now as the one leaving, and the next comes in beside it.
-            guard let arriving = incoming, target !== arriving else { return }
-            let from = lists.firstIndex { $0 === arriving } ?? 0
-            let to = lists.firstIndex { $0 === target } ?? 0
-            // Whatever the first turn had still to do is no longer wanted.
-            landings += 1
-            let token = landings
-            var still = Transaction()
-            still.disablesAnimations = true
-            withTransaction(still) {
-                // Where the arriving page is at this instant, mid-turn.
-                turnAmount = incomingCovers ? 0 : turnProbe.value + CGFloat(incomingSide)
-                leaving = arriving
-                incoming = target
-                incomingSide = to > from ? 1 : -1
-                incomingCovers = false
-            }
-            Task { @MainActor in
-                // One frame, so the pages are drawn where they stand before they move on.
-                try? await Task.sleep(for: .milliseconds(20))
-                guard token == landings else { return }
-                land(on: target)
-            }
-            return
-        }
-        guard target !== list else {
+        guard isTurning || target !== list else {
             showsArchive = false
             showsSettings = false
             return
         }
-        begin(target, from: list)
+        go(to: target)
     }
 
-    private func begin(_ target: TaskList, from current: TaskList) {
-        guard target !== current else { return }
-        let from = lists.firstIndex { $0 === current } ?? 0
-        let to = lists.firstIndex { $0 === target } ?? 0
-        incoming = target
-        incomingSide = to > from ? 1 : -1
-        land(on: target)
-    }
-
-    /// Ends a turn that is still on its way, without waiting for it: the list
-    /// being turned to becomes the page now. Returns that list.
-    @discardableResult
-    private func finishLanding() -> TaskList? {
-        guard isLanding, let target = incoming else { return nil }
-        // Whatever the turn had still to do is no longer wanted.
-        landings += 1
-        var swap = Transaction()
-        swap.disablesAnimations = true
-        withTransaction(swap) {
-            select(target)
-            turnAmount = 0
-            showsArchive = false
-            showsSettings = false
-            incoming = nil
-            leaving = nil
-            incomingCovers = false
-            isLanding = false
-        }
-        return target
-    }
-
-    /// A sideways drag on empty paper or the list names turns the page: it
-    /// follows the finger, with the next list beside it. Left for the next list,
-    /// right for the one before. Not while writing or carrying a task, or in settings.
-    private func turnChanged(_ amount: CGFloat) {
-        guard !isWriting, !isLifting, !showsSettings, menu == nil else { return }
-        // A new swipe while the page is still turning: that turn is finished at
-        // once, and the page follows the finger from the next movement on.
-        guard !isLanding else {
-            finishLanding()
-            return
-        }
-        let side = amount < 0 ? 1 : -1
-        if amount != 0, let target = lists.neighbour(of: list, by: side) {
-            incoming = target
-            incomingSide = side
-            turnAmount = amount.clamped(to: -1...1)
-            // The same distance `turnEnded` asks for.
-            let armed = abs(amount) > 0.35
-            if armed != isTurnArmed {
-                isTurnArmed = armed
-                turnArms += 1
-            }
-        } else {
-            // There is no page past the first or the last: the page gives a little and no more.
-            incoming = nil
-            turnAmount = amount * 0.2
-        }
-    }
-
-    private func turnEnded(_ amount: CGFloat, _ speed: CGFloat) {
-        isTurnArmed = false
-        guard !isLanding else { return }
-        // Far enough, or a quick flick the same way.
-        let flicked = abs(amount) > 0.05 && speed * amount > 0 && abs(speed) > 1.2
-        if let target = incoming, turnAmount != 0, abs(amount) > 0.35 || flicked {
-            land(on: target)
-        } else {
-            // Pulled well past the first or the last page: the paper stops there.
-            if incoming == nil, abs(amount) > 0.2 { bumps += 1 }
-            withAnimation(.settle) {
-                turnAmount = 0
-            } completion: {
-                if !isLanding { incoming = nil }
-            }
-        }
-    }
-
-    /// Finishes the turn, then makes the incoming list the page.
+    /// Sends the row of pages to a list. Called again before it has arrived,
+    /// the row goes on from where it is, at the speed it has.
     /// What was being written stays on the list it was written on.
-    private func land(on target: TaskList) {
+    private func go(to target: TaskList, animation: Animation = .turn) {
         addDraft()
         focus = nil
-        isLanding = true
-        landings += 1
-        let token = landings
+        let changesCourse = target !== (heading ?? list)
+        // Coming back to the page that never left: nothing needs covering.
+        let returns = target === list && !stripCovers
+        heading = target
+        turns += 1
+        let token = turns
         // Felt at the instant the turn is asked for, as the page sets off.
-        if !PenHaptics.shared.snap() { turnTaps += 1 }
-        let arrive = {
-            showsArchive = false
-            showsSettings = false
-            select(target)
-            turnAmount = 0
-            incoming = nil
-            leaving = nil
-            isLanding = false
-        }
+        if changesCourse, !PenHaptics.shared.snap() { turnTaps += 1 }
+        var still = Transaction()
+        still.disablesAnimations = true
         guard !reduceMotion else {
             // No sliding: the new page fades in over the old one.
-            withAnimation(.easeInOut(duration: 0.2)) { arrive() }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                select(target)
+                position = CGFloat(index(of: target))
+                showsArchive = false
+                showsSettings = false
+                isTurning = false
+                stripCovers = false
+                heading = nil
+            }
             return
         }
-        withAnimation(.turn) {
-            turnAmount = CGFloat(-incomingSide)
+        isTurning = true
+        withAnimation(animation) {
+            position = CGFloat(index(of: target))
         } completion: {
             // Another turn took over before this one arrived.
-            guard token == landings, isLanding else { return }
+            guard token == turns else { return }
+            guard !returns else {
+                isTurning = false
+                heading = nil
+                return
+            }
             // The real page takes the place of the one that slid in. The one that
             // slid in stays on top for a moment, so the swap is never seen.
-            var swap = Transaction()
-            swap.disablesAnimations = true
-            withTransaction(swap) {
-                incomingCovers = true
-                leaving = nil
+            withTransaction(still) {
+                stripCovers = true
                 select(target)
-                turnAmount = 0
                 showsArchive = false
                 showsSettings = false
             }
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(80))
-                guard token == landings else { return }
-                withTransaction(swap) {
-                    incoming = nil
-                    incomingCovers = false
-                    isLanding = false
+                guard token == turns else { return }
+                withTransaction(still) {
+                    isTurning = false
+                    stripCovers = false
+                    heading = nil
                 }
             }
+        }
+    }
+
+    /// Ends a turn that is still on its way, without waiting for it: the list
+    /// it was heading for becomes the page now.
+    private func settle() {
+        guard isTurning, let target = heading else { return }
+        turns += 1
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still) {
+            select(target)
+            position = CGFloat(index(of: target))
+            showsArchive = false
+            showsSettings = false
+            isTurning = false
+            stripCovers = false
+            heading = nil
+        }
+    }
+
+    /// A sideways drag along the bottom of the page moves the row of pages
+    /// with the finger. Left for the next list, right for the one before.
+    /// Not while writing or carrying a task, or in settings.
+    private func turnChanged(_ amount: CGFloat) {
+        // Not while a task is being struck or a strike undone: that drag is the pen's.
+        guard !isWriting, !isLifting, !showsSettings, !isCrossing, menu == nil else { return }
+        // A new swipe while the row is still moving by itself: that turn is
+        // finished at once, and the row follows the finger from the next movement on.
+        guard isDraggingTurn || !isTurning else {
+            settle()
+            return
+        }
+        // The first few points are left for a task to claim the drag as a strike.
+        guard isDraggingTurn || abs(amount) > 0.03 else { return }
+        isDraggingTurn = true
+        isTurning = true
+        heading = nil
+        let here = CGFloat(index(of: list))
+        let last = CGFloat(max(lists.count - 1, 0))
+        var wanted = here - amount.clamped(to: -1...1)
+        // There is no page past the first or the last: the row gives a little and no more.
+        if wanted < 0 { wanted *= 0.2 }
+        if wanted > last { wanted = last + (wanted - last) * 0.2 }
+        position = wanted
+        // The same distance `turnEnded` asks for.
+        let armed = abs(amount) > 0.35 && lists.neighbour(of: list, by: amount < 0 ? 1 : -1) != nil
+        if armed != isTurnArmed {
+            isTurnArmed = armed
+            turnArms += 1
+        }
+    }
+
+    private func turnEnded(_ amount: CGFloat, _ speed: CGFloat) {
+        isTurnArmed = false
+        guard isDraggingTurn else { return }
+        isDraggingTurn = false
+        let neighbour = lists.neighbour(of: list, by: amount < 0 ? 1 : -1)
+        // Far enough, or a quick flick the same way.
+        let flicked = abs(amount) > 0.05 && speed * amount > 0 && abs(speed) > 1.2
+        if amount != 0, let neighbour, abs(amount) > 0.35 || flicked {
+            go(to: neighbour)
+        } else {
+            // Pulled well past the first or the last page: the paper stops there.
+            if neighbour == nil, abs(amount) > 0.2 { bumps += 1 }
+            go(to: list, animation: .settle)
         }
     }
 
@@ -458,6 +482,11 @@ struct PageView: View {
             copies += 1
             copy(task.text)
         })
+        // The one that matters. Drawing a loop round the task does the same.
+        options.append(MenuOption(title: task.isCircled ? "Uncircle" : "Circle") {
+            menu = nil
+            context.toggleCircle(task)
+        })
         // No confirmation: deleting a task is undone with a shake or Cmd+Z.
         options.append(MenuOption(title: "Delete", isDestructive: true) {
             menu = nil
@@ -485,6 +514,13 @@ struct PageView: View {
             menu = nil
             renamingID = id
         }]
+        #if os(iOS)
+        // Invite people, see who is on the list, stop sharing or leave.
+        options.append(MenuOption(title: held.isShared ? "Shared" : "Share") {
+            menu = nil
+            share(held)
+        })
+        #endif
         options.append(MenuOption(title: "New list") {
             menu = nil
             isNamingList = true
@@ -498,12 +534,49 @@ struct PageView: View {
         return options
     }
 
-    /// A name was written for a new list: it is added after the last, and the page turns to it.
+    /// A name was written for a new list: it is added after the last, and becomes the page.
     private func addList(named name: String) {
-        guard let new = try? context.addList(named: name), !isLanding else { return }
-        incoming = new
-        incomingSide = 1
-        land(on: new)
+        guard let new = try? context.addList(named: name) else { return }
+        settle()
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { select(new) }
+    }
+
+    /// On a shared list, who wrote the held task and who struck it.
+    private var menuNote: String? {
+        guard list.isShared, case .task(let id, _) = menu,
+              let task = (list.tasks ?? []).first(where: { $0.id == id }), let who = task.addedBy
+        else { return nil }
+        return "Added by \(who)"
+    }
+
+    #if os(iOS)
+    /// Opens the system's sharing sheet for a list. The list has to be in
+    /// iCloud first, so this can take a moment, and can fail.
+    private func share(_ target: TaskList) {
+        guard CloudSync.shared.isRunning else {
+            say("Turn on iCloud sync to share.")
+            return
+        }
+        Task { @MainActor in
+            do {
+                let share = target.isSomeoneElses
+                    ? try await CloudSync.shared.joinedShare(for: target)
+                    : try await CloudSync.shared.share(for: target)
+                sharing = ListShare(share: share, list: target)
+            } catch {
+                say("Could not reach iCloud to share.")
+            }
+        }
+    }
+    #endif
+
+    /// A word from the app, at the bottom of the page, for a few seconds.
+    private func say(_ words: String) {
+        notice = words
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            if notice == words { notice = nil }
+        }
     }
 
     /// The question before a list is deleted is showing.
@@ -561,7 +634,7 @@ struct PageView: View {
             escape()
             return .handled
         }
-        guard !showsArchive, !showsSettings, menu == nil, !isLanding,
+        guard !showsArchive, !showsSettings, menu == nil, !isTurning,
               press.modifiers.subtracting([.shift, .capsLock]).isEmpty,
               press.characters.count == 1, let character = press.characters.first,
               character.isLetter || character.isNumber || character.isPunctuation || character.isSymbol
@@ -596,7 +669,7 @@ struct PageView: View {
             },
             showsSettings: showsSettings,
             toggleSettings: {
-                guard !isLanding else { return }
+                guard !isTurning else { return }
                 menu = nil
                 focus = nil
                 showsArchive = false
@@ -604,7 +677,7 @@ struct PageView: View {
             },
             showsArchive: showsArchive,
             toggleArchive: {
-                guard !isLanding else { return }
+                guard !isTurning else { return }
                 menu = nil
                 focus = nil
                 showsSettings = false
@@ -654,7 +727,7 @@ struct PageView: View {
         let lines = draft.split(whereSeparator: \.isNewline)
         draft = ""
         return lines.reduce(false) { added, line in
-            context.addTask(String(line), to: list) != nil || added
+            context.addTask(String(line), to: list, by: CloudSync.shared.myName) != nil || added
         }
     }
 }

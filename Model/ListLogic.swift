@@ -75,10 +75,12 @@ extension ModelContext {
 
     /// Adds a task below the last one. Returns `nil` if the text is blank.
     @discardableResult
-    func addTask(_ text: String, to list: TaskList) -> TaskItem? {
+    func addTask(_ text: String, to list: TaskList, by person: String? = nil) -> TaskItem? {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
         let task = TaskItem(text: text, order: nextOrder(in: list), list: list)
+        // On a shared list, who wrote it. On the user's own lists it goes without saying.
+        if list.isShared { task.addedBy = person }
         insert(task)
         return task
     }
@@ -87,8 +89,16 @@ extension ModelContext {
     func strike(_ task: TaskItem, strokeData: Data? = nil, by person: String? = nil, at date: Date = .now) {
         guard task.isLive else { return }
         task.struckDate = date
+        // Done is done: the circle goes with the strike.
+        task.circledDate = nil
         task.strokeData = strokeData
         task.struckBy = person
+    }
+
+    /// Circles a live task, or clears its circle.
+    func toggleCircle(_ task: TaskItem, at date: Date = .now) {
+        guard task.isLive else { return }
+        task.circledDate = task.isCircled ? nil : date
     }
 
     /// Undoes a strike, or restores a task from the archive. It keeps its place on the page.
@@ -181,53 +191,14 @@ enum PageStore {
     /// The iCloud container the lists sync through (brief: Data model and sync).
     static let cloudContainer = "iCloud.app.sans-serif"
 
-    /// Lists and tasks, stored on the device. With `syncs`, they also go to the
-    /// user's private iCloud database and follow them to their other devices.
-    ///
-    /// If the store cannot be opened with iCloud, for any reason, it is opened
-    /// without: the lists are always there, and sync is the part that waits.
-    static func makeContainer(inMemory: Bool = false, syncs: Bool = false) throws -> ModelContainer {
-        let local = ModelConfiguration(isStoredInMemoryOnly: inMemory, cloudKitDatabase: .none)
-        guard syncs, !inMemory else {
-            return try ModelContainer(for: TaskList.self, TaskItem.self, configurations: local)
-        }
-        let synced = ModelConfiguration(cloudKitDatabase: .private(cloudContainer))
-        do {
-            return try ModelContainer(for: TaskList.self, TaskItem.self, configurations: synced)
-        } catch {
-            return try ModelContainer(for: TaskList.self, TaskItem.self, configurations: local)
-        }
+    /// Lists and tasks, stored on the device. iCloud is not SwiftData's
+    /// business here: `CloudSync` speaks to it, because SwiftData cannot share
+    /// a list with other people. `name` picks a store of its own, apart from
+    /// the user's lists.
+    static func makeContainer(inMemory: Bool = false, named name: String? = nil) throws -> ModelContainer {
+        let local = ModelConfiguration(name, isStoredInMemoryOnly: inMemory, cloudKitDatabase: .none)
+        return try ModelContainer(for: TaskList.self, TaskItem.self, configurations: local)
     }
-
-    #if DEBUG
-    /// Tells iCloud's development side every record type and field the lists
-    /// use, the empty ones included, so the layout can then be deployed to
-    /// production in the CloudKit Console. Run once, from a development build
-    /// on a device signed in to iCloud, with the launch argument
-    /// `-initCloudKitSchema`. This is the way Apple's SwiftData documentation
-    /// gives for it: SwiftData has no call of its own, so Core Data is asked.
-    ///
-    /// With `printOnly`, nothing is sent: the records that would be created are
-    /// printed, which works without an iCloud account.
-    static func initializeCloudKitSchema(printOnly: Bool = false) throws {
-        guard let model = NSManagedObjectModel.makeManagedObjectModel(for: [TaskList.self, TaskItem.self]) else {
-            return
-        }
-        let url = URL.temporaryDirectory.appending(path: "schema-\(UUID().uuidString).store")
-        let description = NSPersistentStoreDescription(url: url)
-        description.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(containerIdentifier: cloudContainer)
-        description.shouldAddStoreAsynchronously = false
-        let container = NSPersistentCloudKitContainer(name: "Schema", managedObjectModel: model)
-        container.persistentStoreDescriptions = [description]
-        var failure: Error?
-        container.loadPersistentStores { _, error in failure = error }
-        if let failure { throw failure }
-        try container.initializeCloudKitSchema(options: printOnly ? [.dryRun, .printSchema] : [])
-        if let store = container.persistentStoreCoordinator.persistentStores.first {
-            try container.persistentStoreCoordinator.remove(store)
-        }
-    }
-    #endif
 
     /// Creates life, work and home when the store has no lists at all.
     static func seedDefaultListsIfNeeded(in context: ModelContext) throws {

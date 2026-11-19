@@ -11,10 +11,14 @@ struct GuideLine: View {
     var strikesByDrag = false
     /// A dotted ring on the line: hold here.
     var showsRing = false
+    /// "Circle what matters.": a loop drawn round the line circles it, with a dotted loop to follow.
+    var circlesByDrag = false
+    var isCircled = false
     var strikeColor: Color = .ink
     /// Lines in the archive are simply there.
     var writesIn = true
     var onStruckByDrag: () -> Void = {}
+    var onCircled: () -> Void = {}
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -26,6 +30,10 @@ struct GuideLine: View {
     @State private var written: CGFloat = 0
     @State private var ticks = DragTicks()
     @State private var isArmed = false
+    /// Where the finger has been while it draws a loop.
+    @State private var loop: [CGPoint] = []
+    /// How much of the loop round the line is drawn, from 0 to 1.
+    @State private var circled = 0.0
 
     private var strokes: [Stroke] { Stroke.generated(lines: max(lines.count, 1), seed: seed) }
 
@@ -41,6 +49,14 @@ struct GuideLine: View {
                             lines = new
                             if isStruck, !isDragging { progress = Double(new.count) }
                         }
+                    CircleMark(lines: measured, seed: seed &+ 5, progress: circled)
+                    if circlesByDrag, !isCircled, let words = CircleMark.words(measured) {
+                        // Pencil, not ink: the way round.
+                        CircleLoop(words: words, seed: seed &+ 5)
+                            .stroke(Color.inkFaded, style: GuidePath.style)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
                     if let line = measured.first, !isStruck {
                         if strikesByDrag {
                             // When the finger starts across, the guide fades and ink takes over.
@@ -76,13 +92,23 @@ struct GuideLine: View {
                 }
                 withAnimation(.easeOut(duration: 0.45).delay(0.12)) { written = 1 }
             }
+            .onChange(of: isCircled, initial: true) { old, new in
+                withAnimation(old != new && !reduceMotion ? .easeOut(duration: 0.42) : nil) { circled = new ? 1 : 0 }
+            }
             // Struck for the user, when the step was done somewhere else on the page.
             .onChange(of: isStruck) { _, struck in
                 if struck, !isDragging { draw(to: Double(max(lines.count, 1))) }
+                // Done is done: the circle goes with the strike.
+                if struck { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { circled = 0 } }
             }
     }
 
     private func dragChanged(_ value: HorizontalDragValue) {
+        if circlesByDrag, !isCircled {
+            if loop.isEmpty { loop = [value.startLocation] }
+            loop.append(value.location)
+            return
+        }
         guard strikesByDrag, !isStruck, let line = lines.first, let stroke = strokes.first,
               value.translation.width > 2 || isDragging
         else { return }
@@ -102,6 +128,11 @@ struct GuideLine: View {
     }
 
     private func dragEnded(_ value: HorizontalDragValue) {
+        if circlesByDrag, !isCircled {
+            if TaskLine.closes(loop + [value.location]) { onCircled() }
+            loop = []
+            return
+        }
         guard isDragging, let line = lines.first else { return }
         let farEnough = value.translation.width >= min((line.maxX - line.minX) * 0.4, 90)
         isArmed = false

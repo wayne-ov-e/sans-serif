@@ -9,7 +9,7 @@ struct WorkHours: Equatable, Sendable {
     var end: Int
 
     static let standard = WorkHours(start: 9, end: 17)
-    /// The system keeps a Live Activity for eight hours and no longer.
+    /// The system keeps a Live Activity for eight hours and no longer, so the hours are never longer.
     static let longest = 8
 
     static let startKey = "workHoursStart"
@@ -18,7 +18,9 @@ struct WorkHours: Equatable, Sendable {
     init(start: Int, end: Int) {
         let start = min(max(start, 0), 22)
         self.start = start
-        self.end = min(max(end, start + 1), 23)
+        // After the start, within the day, and no more than eight hours on:
+        // the system takes a Live Activity down after that, whatever is asked.
+        self.end = min(max(end, start + 1), min(23, start + Self.longest))
     }
 
     /// The hours kept in settings.
@@ -38,7 +40,13 @@ struct WorkHours: Equatable, Sendable {
     }
 
     func steppingEnd(by step: Int) -> WorkHours {
-        WorkHours(start: start, end: Self.wrap(end + step, in: (start + 1)...23))
+        movingEnd(to: Self.wrap(end + step, in: (start + 1)...23))
+    }
+
+    /// The end moved to an hour. Past eight hours, the start comes along behind it.
+    private func movingEnd(to hour: Int) -> WorkHours {
+        let end = min(max(hour, start + 1), 23)
+        return WorkHours(start: max(start, end - Self.longest), end: end)
     }
 
     /// A number typed for the start. On a twelve-hour clock, 1 to 12 keep the
@@ -58,13 +66,13 @@ struct WorkHours: Equatable, Sendable {
         _ number: Int, afternoon: Bool? = nil, twelveHour: Bool = WorkHours.clockIsTwelveHour
     ) -> WorkHours {
         guard twelveHour, (1...12).contains(number) else {
-            return WorkHours(start: start, end: min(max(number, 0), 23))
+            return movingEnd(to: min(max(number, 0), 23))
         }
         let morning = number % 12
         if let afternoon {
-            return WorkHours(start: start, end: morning + (afternoon ? 12 : 0))
+            return movingEnd(to: morning + (afternoon ? 12 : 0))
         }
-        return WorkHours(start: start, end: morning > start ? morning : morning + 12)
+        return movingEnd(to: morning > start ? morning : morning + 12)
     }
 
     /// The same hour in the other half of the day: 9 AM to 9 PM and back.
@@ -73,7 +81,7 @@ struct WorkHours: Equatable, Sendable {
     }
 
     func end(afternoon: Bool) -> WorkHours {
-        WorkHours(start: start, end: end % 12 + (afternoon ? 12 : 0))
+        movingEnd(to: end % 12 + (afternoon ? 12 : 0))
     }
 
     private func movingStart(to hour: Int) -> WorkHours {

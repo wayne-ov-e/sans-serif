@@ -199,6 +199,8 @@ private struct HoursLine: View {
     @AppStorage(WorkHours.endKey) private var end = WorkHours.standard.end
 
     private var hours: WorkHours { WorkHours(start: start, end: end) }
+    /// Counts the times the eight-hour limit has just been met. Zero when the note is not showing.
+    @State private var capNotes = 0
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -213,12 +215,29 @@ private struct HoursLine: View {
             } typed: {
                 set(hours.typingEnd($0, afternoon: HourEntry.shared.afternoon))
             }
+            // Said for a moment when one end has pushed the other along.
+            if capNotes > 0 {
+                Text("eight hours at most")
+                    .typeStyle(.monthLabel)
+                    .foregroundStyle(.inkFaded)
+                    .transition(.opacity)
+            }
         }
+        .animation(.quick, value: capNotes > 0)
         .typeStyle(.listName)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func set(_ new: WorkHours) {
+        // Both ends moved and the hours are at their longest: one was pushed along by the other.
+        if new.start != start, new.end != end, new.length == WorkHours.longest {
+            capNotes += 1
+            let shown = capNotes
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                if capNotes == shown { capNotes = 0 }
+            }
+        }
         start = new.start
         end = new.end
     }
