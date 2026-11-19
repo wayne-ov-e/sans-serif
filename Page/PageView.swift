@@ -1,3 +1,4 @@
+import CloudKit
 import SwiftData
 import SwiftUI
 #if os(iOS)
@@ -564,7 +565,9 @@ struct PageView: View {
                     : try await CloudSync.shared.share(for: target)
                 sharing = ListShare(share: share, list: target)
             } catch {
-                say("Could not reach iCloud to share.")
+                // With iCloud's own number for what went wrong, so it can be told apart.
+                let code = (error as? CKError).map { " (\($0.code.rawValue))" } ?? ""
+                say("Could not share just now\(code).")
             }
         }
     }

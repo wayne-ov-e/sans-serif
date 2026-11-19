@@ -61,6 +61,20 @@ struct SansSerifApp: App {
             PageMirror.shared.start(context: context)
             // And iCloud, for the user's other devices and for shared lists.
             if syncs, !isTest { CloudSync.shared.start(context: context) }
+            #if DEBUG
+            // Tries the first step of sharing and says in the console how it went.
+            if syncs, arguments.contains("-tryShare"), let first = try context.lists().first {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(6))
+                    do {
+                        let share = try await CloudSync.shared.share(for: first)
+                        NSLog("SYNC share: made, url \(share.url?.absoluteString ?? "none")")
+                    } catch {
+                        NSLog("SYNC share: failed \(error)")
+                    }
+                }
+            }
+            #endif
         } catch {
             fatalError("Could not open the store: \(error)")
         }

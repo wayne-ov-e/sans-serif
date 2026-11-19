@@ -74,10 +74,16 @@ final class PageMirror {
 
     /// Something was struck outside the app while the app is running. The
     /// line shows struck for a moment, then leaves.
+    ///
+    /// It must not wait for that moment itself. The widget is only drawn again
+    /// once the tap has been dealt with, and when this waited for the line to
+    /// leave, all the widget ever showed was the line already gone.
     private func outsideChange() async {
         refresh()
-        try? await Task.sleep(for: .seconds(ModelContext.widgetLinger + 0.1))
-        refresh()
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(ModelContext.widgetLinger + 0.1))
+            refresh()
+        }
     }
 
     func refresh() {

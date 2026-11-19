@@ -49,33 +49,55 @@ struct PendingChange: Codable, Equatable, Sendable {
 /// drawer in the app group. The app's own store stays where it is.
 struct SharedPage: @unchecked Sendable {
     static let group = "group.app.sans-serif"
-    static let shared = SharedPage(defaults: UserDefaults(suiteName: group) ?? .standard)
+    static let shared = SharedPage(
+        defaults: UserDefaults(suiteName: group) ?? .standard,
+        directory: FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group)
+    )
 
     let defaults: UserDefaults
+    /// The app group's folder. What is kept there is read from the file every
+    /// time, so the widget sees at once what the app has just written. Settings
+    /// shared between two processes can be a moment behind. Without a folder,
+    /// as in the tests, the settings are used.
+    var directory: URL?
 
     private static let snapshotKey = "pageSnapshot"
     private static let pendingKey = "pendingChanges"
 
+    private func read(_ key: String) -> Data? {
+        guard let directory else { return defaults.data(forKey: key) }
+        return try? Data(contentsOf: directory.appending(path: "\(key).json"))
+    }
+
+    private func write(_ data: Data?, _ key: String) {
+        guard let directory else {
+            defaults.set(data, forKey: key)
+            return
+        }
+        let file = directory.appending(path: "\(key).json")
+        if let data {
+            try? data.write(to: file, options: .atomic)
+        } else {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+
     var snapshot: PageSnapshot {
         get {
-            guard let data = defaults.data(forKey: Self.snapshotKey),
+            guard let data = read(Self.snapshotKey),
                   let snapshot = try? JSONDecoder().decode(PageSnapshot.self, from: data)
             else { return PageSnapshot() }
             return snapshot
         }
-        nonmutating set {
-            defaults.set(try? JSONEncoder().encode(newValue), forKey: Self.snapshotKey)
-        }
+        nonmutating set { write(try? JSONEncoder().encode(newValue), Self.snapshotKey) }
     }
 
     var pending: [PendingChange] {
         get {
-            guard let data = defaults.data(forKey: Self.pendingKey) else { return [] }
+            guard let data = read(Self.pendingKey) else { return [] }
             return (try? JSONDecoder().decode([PendingChange].self, from: data)) ?? []
         }
-        nonmutating set {
-            defaults.set(try? JSONEncoder().encode(newValue), forKey: Self.pendingKey)
-        }
+        nonmutating set { write(try? JSONEncoder().encode(newValue), Self.pendingKey) }
     }
 
     /// A tap on a task outside the app: struck if it was live, live again if
@@ -99,12 +121,12 @@ struct SharedPage: @unchecked Sendable {
     /// Hands over what was done outside the app, and forgets it.
     func takePending() -> [PendingChange] {
         let changes = pending
-        if !changes.isEmpty { defaults.removeObject(forKey: Self.pendingKey) }
+        if !changes.isEmpty { write(nil, Self.pendingKey) }
         return changes
     }
 
     func reset() {
-        defaults.removeObject(forKey: Self.snapshotKey)
-        defaults.removeObject(forKey: Self.pendingKey)
+        write(nil, Self.snapshotKey)
+        write(nil, Self.pendingKey)
     }
 }

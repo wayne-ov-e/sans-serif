@@ -71,6 +71,14 @@ final class CloudSync {
         }
     }
 
+    /// Queues again whatever iCloud has still never taken: a save it refused
+    /// is dropped by the engine, and would otherwise wait for the next launch.
+    func catchUp() {
+        guard mine != nil else { return }
+        for list in lists() where list.recordData == nil { queue(list, withTasks: false) }
+        for task in tasks() where task.recordData == nil { queue(task) }
+    }
+
     private func engine(for zone: CKRecordZone.ID) -> CKSyncEngine? {
         zone.ownerName == CKCurrentUserDefaultName ? mine : theirs
     }
@@ -352,10 +360,14 @@ final class CloudSync {
     /// shared, so its tasks and its archive go with it and nothing else does.
     func share(for list: TaskList) async throws -> CKShare {
         guard let mine, !list.isSomeoneElses else { throw CKError(.permissionFailure) }
-        // The list has to be in iCloud before it can be shared.
-        try await mine.sendChanges()
+        // The list should be in iCloud before it is shared. If sending stumbles
+        // on something else that is waiting, that is not a reason to give up:
+        // what sharing itself needs is the list's zone, which is made sure of here.
+        catchUp()
+        try? await mine.sendChanges()
         let zone = list.zoneID
         let database = container.privateCloudDatabase
+        _ = try? await database.save(CKRecordZone(zoneID: zone))
         let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: zone)
         let share: CKShare
         if let existing = try? await database.record(for: shareID) as? CKShare {

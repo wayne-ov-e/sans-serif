@@ -38,6 +38,7 @@ struct ContentView: View {
             .onChange(of: scenePhase) { _, _ in
                 try? context.save()
                 PageMirror.shared.refresh()
+                CloudSync.shared.catchUp()
             }
             .onChange(of: [workHours ? 1 : 0, workStart, workEnd]) { _, _ in PageMirror.shared.refresh() }
             // A tap on a widget opens its list: sansserif://list/<id>.

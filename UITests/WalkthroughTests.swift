@@ -355,7 +355,9 @@ final class WalkthroughTests: XCTestCase {
         // While a task is edited in place the app never reports its animations
         // as finished, and each call waits a minute for that. There, one call.
         guard !inOneBurst else {
-            app.typeText(text)
+            // A burst sometimes loses its last key. A space at the end is the
+            // key to lose: a task is kept without it either way.
+            app.typeText(text + " ")
             return
         }
         for character in text {
