@@ -3,7 +3,7 @@ import SwiftData
 import SwiftUI
 
 struct ContentView: View {
-    @Query(sort: \TaskList.order) private var lists: [TaskList]
+    @Query(sort: TaskList.rowOrder) private var lists: [TaskList]
 
     /// The list this window is showing. Each window remembers its own.
     @SceneStorage("currentList") private var currentID: String?
@@ -20,6 +20,7 @@ struct ContentView: View {
     @AppStorage(Setting.workHours.key) private var workHours = Setting.workHours.defaultValue
     @AppStorage(WorkHours.startKey) private var workStart = WorkHours.standard.start
     @AppStorage(WorkHours.endKey) private var workEnd = WorkHours.standard.end
+    @AppStorage(WorkHours.listKey) private var workList = ""
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -40,7 +41,10 @@ struct ContentView: View {
                 PageMirror.shared.refresh()
                 CloudSync.shared.catchUp()
             }
+            // While the app is open it keeps asking iCloud for what others have written.
+            .onChange(of: scenePhase, initial: true) { _, phase in CloudSync.shared.watch(phase == .active) }
             .onChange(of: [workHours ? 1 : 0, workStart, workEnd]) { _, _ in PageMirror.shared.refresh() }
+            .onChange(of: workList) { _, _ in PageMirror.shared.refresh() }
             // A tap on a widget opens its list: sansserif://list/<id>.
             .onOpenURL { url in
                 guard url.host() == "list", let id = UUID(uuidString: url.lastPathComponent),
@@ -68,7 +72,11 @@ struct ContentView: View {
         } else if let current = lists.first(where: { $0.id.uuidString == currentID }) ?? lists.first {
             PageView(list: current, lists: lists) { currentID = $0.id.uuidString }
                 // Shake on iPhone and Cmd+Z on Mac undo the last change, a deleted task included.
-                .onChange(of: undoManager, initial: true) { _, new in context.undoManager = new }
+                .onChange(of: undoManager, initial: true) { _, new in
+                    // Nothing unsaved is left for undo to trip over: see `GuideView.end`.
+                    try? context.save()
+                    context.undoManager = new
+                }
         } else {
             Color.paper.ignoresSafeArea()
         }

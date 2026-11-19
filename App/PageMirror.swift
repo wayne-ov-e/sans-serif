@@ -8,7 +8,7 @@ extension ModelContext {
     func pageSnapshot(current: UUID?, at now: Date = .now) throws -> PageSnapshot {
         PageSnapshot(
             lists: try lists().map { list in
-                let tasks = (list.tasks ?? []).sorted { $0.order < $1.order }
+                let tasks = (list.tasks ?? []).sorted(by: TaskItem.inPageOrder)
                 let shown = tasks.filter { task in
                     guard let struck = task.struckDate else { return true }
                     return now.timeIntervalSince(struck) < PageSnapshot.keep

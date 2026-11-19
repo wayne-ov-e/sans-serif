@@ -129,7 +129,9 @@ final class WalkthroughTests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.8)
         // On the words themselves: the paper beside a short task starts a new one.
         app.buttons["Second"].coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
-        type(" thing")
+        // In one burst: while a task is edited in place the app sometimes never
+        // reports itself at rest, and each key then waits a minute for it.
+        type(" thing", inOneBurst: true)
         app.buttons["done"].tap()
         XCTAssertTrue(app.buttons["Second thing"].waitForExistence(timeout: 3), "an edit is kept")
 
@@ -180,6 +182,7 @@ final class WalkthroughTests: XCTestCase {
         wait(for: "Ends")
         let end = line("Ends").value as? String
         // A tap brings up the number keys, and one key is enough for most hours.
+        Thread.sleep(forTimeInterval: 1)
         line("Ends").tap()
         type("7")
         wait(for: "Ends")

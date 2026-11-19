@@ -520,3 +520,35 @@ struct RecordEdgeTests {
         #expect(task.text == "Bins out")
     }
 }
+
+@Suite("People on a shared list")
+struct SharePeopleTests {
+    private func person(_ name: String, owner: Bool = false, me: Bool = false, waiting: Bool = false) -> SharePerson {
+        SharePerson(id: name, name: name, isOwner: owner, isMe: me, isWaiting: waiting)
+    }
+
+    @Test func aPersonIsNamedByTheBestThingICloudGives() {
+        var components = PersonNameComponents()
+        components.givenName = "Ada"
+        components.familyName = "Lovelace"
+        #expect(SharePerson.name(components: components, email: "ada@example.com", phone: nil).contains("Ada"))
+        #expect(SharePerson.name(components: nil, email: "ada@example.com", phone: "+15550100") == "ada@example.com")
+        #expect(SharePerson.name(components: nil, email: nil, phone: "+15550100") == "+15550100")
+        #expect(SharePerson.name(components: nil, email: "", phone: "") == "Someone")
+        #expect(SharePerson.name(components: PersonNameComponents(), email: nil, phone: nil) == "Someone")
+    }
+
+    @Test func theOwnerComesFirstAndTheRestByName() {
+        let people = [person("zoe"), person("Ben"), person("Wayne", owner: true), person("ada")]
+        #expect(people.sorted(by: SharePerson.before).map(\.name) == ["Wayne", "ada", "Ben", "zoe"])
+    }
+
+    @Test func whatStandsAfterANameSaysWhoTheyAreToTheList() {
+        #expect(person("a", owner: true, me: true).note == "you, owner")
+        #expect(person("a", me: true).note == "you")
+        #expect(person("a", owner: true).note == "owner")
+        #expect(person("a", waiting: true).note == "invited")
+        #expect(person("a").note == nil)
+        #expect(person("a", me: true, waiting: true).note == "you")
+    }
+}

@@ -5,8 +5,9 @@ import SwiftUI
 /// is not here: a strike is drawn at the speed of the hand (see `TaskLine`).
 extension Animation {
     /// A whole sheet coming or going: the archive, settings. It has some weight
-    /// and settles once at the end.
-    static let sheet = Animation.spring(response: 0.38, dampingFraction: 0.84)
+    /// and settles once at the end. Damping was 0.84; Wayne asked for slightly
+    /// less bounce (Nov 19, 2026). At 1 there would be none at all.
+    static let sheet = Animation.spring(response: 0.38, dampingFraction: 0.92)
     /// The page turning to another list. Quick, and it stops dead: no bounce
     /// when the next page arrives.
     static let turn = Animation.spring(response: 0.32, dampingFraction: 1)

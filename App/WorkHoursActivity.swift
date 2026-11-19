@@ -23,7 +23,8 @@ enum WorkHoursActivity {
         let isOn = defaults.object(forKey: Setting.workHours.key) as? Bool ?? Setting.workHours.defaultValue
         let activities = Activity<PageActivityAttributes>.activities
         guard isAllowed, isOn, ActivityAuthorizationInfo().areActivitiesEnabled,
-              var list = snapshot.list(snapshot.current)
+              // The list chosen in settings, or the one open in the app.
+              var list = snapshot.list(WorkHours.chosenList(defaults: defaults) ?? snapshot.current)
         else {
             activities.forEach(end)
             return

@@ -14,6 +14,23 @@ struct WorkHours: Equatable, Sendable {
 
     static let startKey = "workHoursStart"
     static let endKey = "workHoursEnd"
+    /// The list the Live Activity shows, by its identity. Empty for the list
+    /// that is open in the app, whichever that is.
+    static let listKey = "workHoursList"
+
+    /// The list chosen for the Live Activity, or nothing for the open one.
+    static func chosenList(defaults: UserDefaults = .standard) -> UUID? {
+        defaults.string(forKey: listKey).flatMap(UUID.init(uuidString:))
+    }
+
+    /// The next choice after `current`, for a tap on the word in settings:
+    /// the open list, then each list in the order of their names, then the
+    /// open list again. A choice that is no longer among the lists counts as
+    /// the open list.
+    static func nextList(after current: UUID?, in lists: [UUID]) -> UUID? {
+        guard let current, let index = lists.firstIndex(of: current) else { return lists.first }
+        return index + 1 < lists.count ? lists[index + 1] : nil
+    }
 
     init(start: Int, end: Int) {
         let start = min(max(start, 0), 22)

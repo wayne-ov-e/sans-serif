@@ -62,10 +62,8 @@ struct PageView: View {
     @State private var isNamingList = false
     /// Something the app has to say, shown where the list names are for a moment.
     @State private var notice: String?
-    #if os(iOS)
-    /// The share sheet is up for this list.
-    @State private var sharing: ListShare?
-    #endif
+    /// The list being shared. Its lines stand where settings do, in their place.
+    @State private var sharingID: UUID?
     /// The menu that is open, if any.
     @State private var menu: PageMenu?
     /// The list whose name is being rewritten.
@@ -107,7 +105,15 @@ struct PageView: View {
             onPullPastEnd: pullPastEnd,
             onPullPastTop: pullPastTop
         ) {
-            SettingsLines()
+            if let shared = lists.first(where: { $0.id == sharingID }) {
+                ShareLines(list: shared) {
+                    // Leaving is deleting the list here: the page asks first.
+                    showsSettings = false
+                    menu = .list(shared.id, confirmingDelete: true)
+                }
+            } else {
+                SettingsLines()
+            }
         } content: {
             TaskLines(
                 tasks: tasksOnPage,
@@ -164,7 +170,7 @@ struct PageView: View {
                 isNamingList: $isNamingList,
                 addList: addList,
                 openArchive: { showsArchive = true },
-                openSettings: { showsSettings = true }
+                openSettings: openSettings
             )
             }
             }
@@ -176,11 +182,6 @@ struct PageView: View {
         // Turning to a list: a swipe ticks where letting go will turn the page.
         // Then, for a swipe or a tap on a name, one short crisp haptic at the
         // instant the page sets off.
-        #if os(iOS)
-        .sheet(item: $sharing) { item in
-            ShareSheet(item: item).ignoresSafeArea()
-        }
-        #endif
         .haptic(.pen, trigger: isNamingList) { $0 }
         .haptic(.selection, trigger: turnArms)
         .haptic(.turn, trigger: turnTaps)
@@ -211,7 +212,13 @@ struct PageView: View {
             // Leaving the empty line keeps what was typed on it.
             if old == .newTask, new != .newTask { addDraft() }
             // With a keyboard, the page listens whenever nothing is being written.
-            if new == nil, Self.hasKeyboard { focus = .page }
+            // Not while an hour is typed in settings: that field is not one
+            // of the page's own, and taking the keys back here took them from
+            // it, so with a keyboard attached an hour could not be typed at all.
+            if new == nil, Self.hasKeyboard, HourEntry.shared.typing == nil { focus = .page }
+        }
+        .onChange(of: HourEntry.shared.typing) { _, typing in
+            if typing == nil, focus == nil, Self.hasKeyboard { focus = .page }
         }
         .onAppear { if Self.hasKeyboard { focus = .page } }
         .background {
@@ -239,7 +246,7 @@ struct PageView: View {
     private var tasksOnPage: [TaskItem] {
         (list.tasks ?? [])
             .filter { $0.isLive || held[$0.id] != nil }
-            .sorted { $0.order < $1.order }
+            .sorted(by: TaskItem.inPageOrder)
     }
 
     private func strike(_ task: TaskItem, with strokes: [Stroke]) {
@@ -550,28 +557,21 @@ struct PageView: View {
         return "Added by \(who)"
     }
 
-    #if os(iOS)
-    /// Opens the system's sharing sheet for a list. The list has to be in
-    /// iCloud first, so this can take a moment, and can fail.
+    /// Brings down the lines for sharing a list, where settings stand.
     private func share(_ target: TaskList) {
-        guard CloudSync.shared.isRunning else {
+        var canShare = CloudSync.shared.isRunning
+        #if DEBUG
+        if ShareLines.isPreview { canShare = true }
+        #endif
+        guard canShare else {
             say("Turn on iCloud sync to share.")
             return
         }
-        Task { @MainActor in
-            do {
-                let share = target.isSomeoneElses
-                    ? try await CloudSync.shared.joinedShare(for: target)
-                    : try await CloudSync.shared.share(for: target)
-                sharing = ListShare(share: share, list: target)
-            } catch {
-                // With iCloud's own number for what went wrong, so it can be told apart.
-                let code = (error as? CKError).map { " (\($0.code.rawValue))" } ?? ""
-                say("Could not share just now\(code).")
-            }
-        }
+        focus = nil
+        showsArchive = false
+        sharingID = target.id
+        showsSettings = true
     }
-    #endif
 
     /// A word from the app, at the bottom of the page, for a few seconds.
     private func say(_ words: String) {
@@ -614,8 +614,14 @@ struct PageView: View {
         if showsArchive {
             showsArchive = false
         } else {
-            showsSettings = true
+            openSettings()
         }
+    }
+
+    /// Settings come down. Not the lines for sharing a list, which stand in the same place.
+    private func openSettings() {
+        sharingID = nil
+        showsSettings = true
     }
 
     // MARK: Keyboard
@@ -676,7 +682,7 @@ struct PageView: View {
                 menu = nil
                 focus = nil
                 showsArchive = false
-                showsSettings.toggle()
+                if showsSettings { showsSettings = false } else { openSettings() }
             },
             showsArchive: showsArchive,
             toggleArchive: {

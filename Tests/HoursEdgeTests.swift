@@ -238,3 +238,47 @@ struct HoursEdgeTests {
         #expect(WorkHours.name(ofHour: 24) == WorkHours.name(ofHour: 0))
     }
 }
+
+@Suite("The list the Live Activity shows")
+struct ActivityListTests {
+    @Test func aTapGoesFromTheOpenListThroughEachListAndBack() {
+        let lists = [UUID(), UUID(), UUID()]
+        var choice: UUID?
+        var seen: [UUID?] = []
+        for _ in 0..<8 {
+            choice = WorkHours.nextList(after: choice, in: lists)
+            seen.append(choice)
+        }
+        #expect(seen == [lists[0], lists[1], lists[2], nil, lists[0], lists[1], lists[2], nil])
+    }
+
+    @Test func aChoiceThatIsGoneOrNoListsAtAllCountsAsTheOpenList() {
+        let lists = [UUID(), UUID()]
+        #expect(WorkHours.nextList(after: UUID(), in: lists) == lists[0])
+        #expect(WorkHours.nextList(after: nil, in: []) == nil)
+        #expect(WorkHours.nextList(after: UUID(), in: []) == nil)
+        #expect(WorkHours.nextList(after: lists[0], in: [lists[0]]) == nil)
+    }
+
+    @Test func theChoiceIsKeptInSettingsAndNonsenseReadsAsTheOpenList() throws {
+        let defaults = try #require(UserDefaults(suiteName: "activity-list-\(UUID().uuidString)"))
+        #expect(WorkHours.chosenList(defaults: defaults) == nil)
+        let id = UUID()
+        defaults.set(id.uuidString, forKey: WorkHours.listKey)
+        #expect(WorkHours.chosenList(defaults: defaults) == id)
+        for nonsense in ["", "work", "1234"] {
+            defaults.set(nonsense, forKey: WorkHours.listKey)
+            #expect(WorkHours.chosenList(defaults: defaults) == nil)
+        }
+        defaults.set(42, forKey: WorkHours.listKey)
+        #expect(WorkHours.chosenList(defaults: defaults) == nil)
+    }
+
+    @Test func theSnapshotGivesTheChosenListOrFallsBackToTheOpenOne() {
+        let lists = ["life", "work"].map { PageSnapshot.List(id: UUID(), name: $0, lines: [], left: 0) }
+        let snapshot = PageSnapshot(lists: lists, current: lists[0].id)
+        #expect(snapshot.list(lists[1].id)?.name == "work")
+        // Chosen, then deleted: the open list is shown.
+        #expect(snapshot.list(UUID())?.name == "life")
+    }
+}

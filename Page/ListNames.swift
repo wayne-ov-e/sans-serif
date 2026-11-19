@@ -180,7 +180,12 @@ private struct NamesThatScroll: ViewModifier {
                 content
             }
             .scrollIndicators(.hidden)
-            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            // A finger does not slide the row: along the bottom of the page a
+            // sideways flick turns to the next list, and the two fought over
+            // it (Wayne, Nov 19, 2026). The row moves by itself to keep the
+            // open list's name in view, so every name is still reached by
+            // turning to it.
+            .scrollDisabled(true)
             // The gap around a name belongs to it, above and below the row too.
             .scrollClipDisabled()
             .onChange(of: showing, initial: true) { _, new in

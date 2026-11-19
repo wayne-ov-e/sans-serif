@@ -2,12 +2,40 @@ import CoreData
 import Foundation
 import SwiftData
 
+// MARK: - Order
+//
+// Two people can write on a shared list in the same moment, and both tasks
+// are then given the same place. Each device must settle that the same way,
+// or the page reads differently on each. So a tie in place goes to whichever
+// was written first, and after that to the identity, which never ties.
+
+extension TaskItem {
+    /// Page order, the same on every device.
+    static func inPageOrder(_ one: TaskItem, _ other: TaskItem) -> Bool {
+        if one.order != other.order { return one.order < other.order }
+        if one.createdDate != other.createdDate { return one.createdDate < other.createdDate }
+        return one.id.uuidString < other.id.uuidString
+    }
+}
+
+extension TaskList {
+    /// The order of the list names, the same on every device.
+    static func inRowOrder(_ one: TaskList, _ other: TaskList) -> Bool {
+        if one.order != other.order { return one.order < other.order }
+        if one.createdDate != other.createdDate { return one.createdDate < other.createdDate }
+        return one.id.uuidString < other.id.uuidString
+    }
+
+    /// For a query of lists: by place, then by when they were made.
+    static let rowOrder = [SortDescriptor(\TaskList.order), SortDescriptor(\TaskList.createdDate)]
+}
+
 // MARK: - Reading a list
 
 extension TaskList {
     /// Tasks on the page, in page order.
     var liveTasks: [TaskItem] {
-        (tasks ?? []).filter(\.isLive).sorted { $0.order < $1.order }
+        (tasks ?? []).filter(\.isLive).sorted(by: TaskItem.inPageOrder)
     }
 
     /// The count beside the list name: tasks left.
@@ -64,7 +92,7 @@ struct ArchiveMonth: Identifiable {
 extension ModelContext {
     /// Every list, in the order of the list names.
     func lists() throws -> [TaskList] {
-        try fetch(FetchDescriptor<TaskList>(sortBy: [SortDescriptor(\.order)]))
+        try fetch(FetchDescriptor<TaskList>(sortBy: TaskList.rowOrder)).sorted(by: TaskList.inRowOrder)
     }
 
     /// Adds a list after the last one. Returns `nil` if the name is blank.
@@ -134,7 +162,7 @@ extension ModelContext {
             task.order = (upper + lower) / 2
         case (_?, _?):
             // No room left between the two. Number the whole list afresh.
-            var tasks = (task.list?.tasks ?? []).filter { $0 !== task }.sorted { $0.order < $1.order }
+            var tasks = (task.list?.tasks ?? []).filter { $0 !== task }.sorted(by: TaskItem.inPageOrder)
             let index = tasks.firstIndex { $0 === lower } ?? tasks.endIndex
             tasks.insert(task, at: index)
             for (position, each) in tasks.enumerated() { each.order = Double(position) }
@@ -176,7 +204,7 @@ extension ModelContext {
             for copy in copies.dropFirst() {
                 // Below what the keeper already has, in their own order.
                 var order = nextOrder(in: keeper)
-                for task in (copy.tasks ?? []).sorted(by: { $0.order < $1.order }) {
+                for task in (copy.tasks ?? []).sorted(by: TaskItem.inPageOrder) {
                     task.order = order
                     task.list = keeper
                     order += 1

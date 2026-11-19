@@ -49,6 +49,15 @@ struct TaskLines: View {
     }
 
     private nonisolated static let space = "lines"
+
+    /// Whether the cursor on the empty line can be put where the app wants
+    /// it. On iOS 18 it cannot: a field told where its cursor is stops the app
+    /// as soon as the text is shortened under it, which the page does every
+    /// time Return ends a task. Every tester on iOS 18.0 would have been
+    /// stopped at their first task. There the cursor is left to the system.
+    private static var cursorCanBePlaced: Bool {
+        if #available(iOS 26, macOS 26, *) { true } else { false }
+    }
     /// How long a picked-up line is held still before its menu opens.
     private static let menuHold: Duration = .seconds(0.25)
 
@@ -93,7 +102,7 @@ struct TaskLines: View {
 
             // The empty paper below the last task. With nothing typed and no
             // cursor in it, it is a blank line.
-            LineField(text: $draft, selection: draftSelection, onReturn: submitDraft)
+            LineField(text: $draft, selection: Self.cursorCanBePlaced ? draftSelection : .constant(nil), onReturn: submitDraft)
                 .focused(focus, equals: .newTask)
                 .accessibilityLabel("New task")
                 .receded(menuTaskID != nil)

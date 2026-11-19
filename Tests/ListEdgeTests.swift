@@ -1,3 +1,4 @@
+import CloudKit
 import Foundation
 import SwiftData
 import Testing
@@ -499,5 +500,92 @@ struct ListEdgeTests {
         context.rollback()
         #expect(try context.fetchCount(FetchDescriptor<TaskItem>()) == 0)
         #expect(list.name == "life")
+    }
+}
+
+/// Two people writing on a shared list at once.
+@MainActor
+@Suite("The same order on every device")
+struct SameOrderTests {
+    /// Two devices, each with its own store, as two people have.
+    private func device() throws -> (ModelContainer, CloudSync) {
+        let container = try PageStore.makeContainer(inMemory: true)
+        return (container, CloudSync(storingIn: container.mainContext))
+    }
+
+    private func record(_ id: UUID, in list: UUID, text: String, order: Double, created: Date) -> CKRecord {
+        let record = CKRecord(
+            recordType: RecordCoder.taskType,
+            recordID: CKRecord.ID(recordName: id.uuidString, zoneID: RecordCoder.zoneID(for: list, owner: nil))
+        )
+        RecordCoder.write(.init(text: text, order: order, created: created), to: record)
+        return record
+    }
+
+    @Test func tasksGivenTheSamePlaceAtOnceReadTheSameOnBothDevices() throws {
+        let (first, firstSync) = try device()
+        let (second, secondSync) = try device()
+        let list = UUID()
+        let moment = Date(timeIntervalSince1970: 1_800_000_000)
+        // Three tasks written in the same moment by different people: all are
+        // given place 4, and two of them the very same instant.
+        let ids = [UUID(), UUID(), UUID()]
+        let records = [
+            record(ids[0], in: list, text: "Ada's", order: 4, created: moment.addingTimeInterval(1)),
+            record(ids[1], in: list, text: "Ben's", order: 4, created: moment),
+            record(ids[2], in: list, text: "Cy's", order: 4, created: moment),
+            record(UUID(), in: list, text: "Earlier", order: 1, created: moment.addingTimeInterval(50)),
+        ]
+        // Each device hears of them in a different order.
+        firstSync.applying { for one in records { firstSync.take(task: one) } }
+        secondSync.applying { for one in records.reversed() { secondSync.take(task: one) } }
+
+        let here = try #require(try first.mainContext.lists().first).liveTasks.map(\.text)
+        let there = try #require(try second.mainContext.lists().first).liveTasks.map(\.text)
+        #expect(here == there)
+        #expect(here.first == "Earlier", "place comes first")
+        #expect(here.last == "Ada's", "then whichever was written first")
+        // Written in the same instant: by identity, which is the same everywhere.
+        let tied = [("Ben's", ids[1]), ("Cy's", ids[2])].sorted { $0.1.uuidString < $1.1.uuidString }.map(\.0)
+        #expect(Array(here[1...2]) == tied)
+
+        let widgetHere = try first.mainContext.pageSnapshot(current: nil).lists[0].lines.map(\.text)
+        let widgetThere = try second.mainContext.pageSnapshot(current: nil).lists[0].lines.map(\.text)
+        #expect(widgetHere == here, "the widgets read as the page does")
+        #expect(widgetThere == here)
+    }
+
+    @Test func listsGivenTheSamePlaceAtOnceStandInTheSameOrderOnBothDevices() throws {
+        let (first, _) = try device()
+        let (second, _) = try device()
+        let moment = Date(timeIntervalSince1970: 1_800_000_000)
+        let made: [(UUID, String, Date)] = [
+            (UUID(), "trips", moment.addingTimeInterval(5)), (UUID(), "errands", moment), (UUID(), "garden", moment),
+        ]
+        for (container, lists) in [(first, made), (second, made.reversed())] {
+            for (id, name, created) in lists {
+                let list = TaskList(name: name, order: 3)
+                list.id = id
+                list.createdDate = created
+                container.mainContext.insert(list)
+            }
+            try container.mainContext.save()
+        }
+        let here = try first.mainContext.lists().map(\.name)
+        #expect(here == (try second.mainContext.lists().map(\.name)))
+        #expect(here.last == "trips")
+    }
+
+    @Test func aTaskCarriedBetweenTwoThatShareAPlaceLandsBetweenThem() throws {
+        let (device, _) = try device()
+        let context = device.mainContext
+        let list = try #require(try context.addList(named: "house"))
+        let tasks = ["One", "Two", "Three"].compactMap { context.addTask($0, to: list) }
+        tasks[0].order = 2
+        tasks[1].order = 2
+        let (upper, lower) = TaskItem.inPageOrder(tasks[0], tasks[1]) ? (tasks[0], tasks[1]) : (tasks[1], tasks[0])
+        context.place(tasks[2], below: upper, above: lower)
+        #expect(list.liveTasks.map(\.text) == [upper.text, "Three", lower.text])
+        #expect(Set(list.liveTasks.map(\.order)).count == 3)
     }
 }

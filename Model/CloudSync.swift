@@ -1,6 +1,7 @@
 import CloudKit
 import Foundation
 import SwiftData
+import SwiftUI
 
 /// Keeps the lists in step with iCloud, and shares a list with other people.
 ///
@@ -113,6 +114,55 @@ final class CloudSync {
         return (try? context?.fetch(one))?.first
     }
 
+    // MARK: Keeping up
+
+    private var sending: Task<Void, Never>?
+    private var watching: Task<Void, Never>?
+
+    /// How often iCloud is asked for changes while the app is open. Changes
+    /// are pushed to the app as well, but a push can take many seconds, and
+    /// the system holds pushes back when there are many. With a shared list,
+    /// someone else may be writing on it right now.
+    static let watchInterval: (shared: Duration, alone: Duration) = (.seconds(3), .seconds(20))
+
+    /// Sends what is waiting, now. Left to itself the engine sends when the
+    /// system finds a good moment, which can be several seconds away.
+    private func sendSoon() {
+        guard mine != nil else { return }
+        sending?.cancel()
+        sending = Task { @MainActor [weak self] in
+            // A moment, so that a run of changes goes out together.
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, let self else { return }
+            for engine in [self.mine, self.theirs].compactMap({ $0 }) {
+                let state = engine.state
+                guard !state.pendingRecordZoneChanges.isEmpty || !state.pendingDatabaseChanges.isEmpty else { continue }
+                try? await engine.sendChanges()
+            }
+        }
+    }
+
+    /// While the app is open, iCloud is asked for changes every few seconds,
+    /// so that what someone else writes on a shared list shows up as they
+    /// write it. Stopped when the app steps back.
+    func watch(_ isOpen: Bool) {
+        watching?.cancel()
+        watching = nil
+        guard isOpen, mine != nil else { return }
+        watching = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                // A list shared by the user is in their own part of iCloud, and
+                // one shared with them is in the other: both are asked.
+                try? await self.theirs?.fetchChanges()
+                try? await self.mine?.fetchChanges()
+                let interval = self.lists().contains(where: \.isShared)
+                    ? Self.watchInterval.shared : Self.watchInterval.alone
+                try? await Task.sleep(for: interval)
+            }
+        }
+    }
+
     // MARK: What changed here
 
     /// The store is about to be saved: everything added, changed or removed since the last save is queued.
@@ -138,6 +188,7 @@ final class CloudSync {
                 queue(task)
             }
         }
+        sendSoon()
     }
 
     private func queue(_ list: TaskList, withTasks: Bool) {
@@ -198,12 +249,16 @@ final class CloudSync {
                 for deletion in changes.deletions { removeList(in: deletion.zoneID) }
             }
         case .fetchedRecordZoneChanges(let changes):
-            applying {
+            // What someone else wrote takes its place on the page the way a
+            // line written here does: the others make room for it.
+            withAnimation(changes.modifications.isEmpty && changes.deletions.isEmpty ? nil : .shuffle) {
+              applying {
                 // Lists before tasks, so that a task finds its list.
                 let records = changes.modifications.map(\.record)
                 for record in records where record.recordType == RecordCoder.listType { take(list: record) }
                 for record in records where record.recordType == RecordCoder.taskType { take(task: record) }
                 for deletion in changes.deletions { remove(deletion.recordID, type: deletion.recordType) }
+              }
             }
             // Two devices each made life, work and home before they met. Folding
             // them together is a change of ours, and goes out like any other.
@@ -232,8 +287,13 @@ final class CloudSync {
         // is saved first, so that it is sent and not taken for iCloud's.
         try? context?.save()
         isApplying = true
+        // What iCloud sends is not the user's to undo, and undo never sees
+        // anything of it that is not saved.
+        let undo = context?.undoManager
+        undo?.disableUndoRegistration()
         changes()
         try? context?.save()
+        undo?.enableUndoRegistration()
         isApplying = false
     }
 
@@ -404,6 +464,7 @@ final class CloudSync {
 
     /// The share for a list, made if it has none yet. The list's zone is
     /// shared, so its tasks and its archive go with it and nothing else does.
+    /// Anyone who is given the link can join, and read and write the list.
     func share(for list: TaskList) async throws -> CKShare {
         guard let mine, !list.isSomeoneElses else { throw CKError(.permissionFailure) }
         // The list should be in iCloud before it is shared. If sending stumbles
@@ -415,20 +476,60 @@ final class CloudSync {
         let database = container.privateCloudDatabase
         _ = try? await database.save(CKRecordZone(zoneID: zone))
         let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: zone)
-        let share: CKShare
+        var share: CKShare
         if let existing = try? await database.record(for: shareID) as? CKShare {
             share = existing
         } else {
-            let new = CKShare(recordZoneID: zone)
-            new[CKShare.SystemFieldKey.title] = list.name
-            new.publicPermission = .none
-            guard let saved = try await database.save(new) as? CKShare else { throw CKError(.internalError) }
+            share = CKShare(recordZoneID: zone)
+        }
+        // The link is the invitation. A share made by an earlier build let
+        // nobody in by the link alone, and is opened up here.
+        if share.publicPermission != .readWrite || share.url == nil {
+            share[CKShare.SystemFieldKey.title] = list.name
+            share.publicPermission = .readWrite
+            guard let saved = try await database.save(share) as? CKShare else { throw CKError(.internalError) }
             share = saved
         }
         list.isShared = true
         list.shareURL = share.url?.absoluteString
         noteName(from: share)
         return share
+    }
+
+    /// The share of a list as it stands, without making one: nothing for a
+    /// list of the user's own that has never been shared.
+    func currentShare(for list: TaskList) async throws -> CKShare? {
+        if list.isSomeoneElses { return try await joinedShare(for: list) }
+        let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: list.zoneID)
+        do {
+            let share = try await container.privateCloudDatabase.record(for: shareID) as? CKShare
+            if let share { noteName(from: share) }
+            return share
+        } catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound {
+            return nil
+        }
+    }
+
+    /// Takes someone off a list the user shared. With the link they can come back.
+    func remove(_ person: SharePerson, from list: TaskList) async throws -> CKShare? {
+        guard !list.isSomeoneElses, let share = try await currentShare(for: list) else { return nil }
+        guard let participant = share.participants.first(where: { SharePerson.identity(of: $0) == person.id }),
+              participant.role != .owner
+        else { return share }
+        share.removeParticipant(participant)
+        return try await container.privateCloudDatabase.save(share) as? CKShare
+    }
+
+    /// The list is the user's alone again: the share is taken down, and the link stops working.
+    func stopSharing(_ list: TaskList) async throws {
+        guard !list.isSomeoneElses else { throw CKError(.permissionFailure) }
+        let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: list.zoneID)
+        do {
+            try await container.privateCloudDatabase.deleteRecord(withID: shareID)
+        } catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound {
+            // Already gone.
+        }
+        sharingStopped(for: list)
     }
 
     /// The share of a list someone else shared, to see who is on it or to leave.
@@ -491,6 +592,71 @@ private final class Listener: CKSyncEngineDelegate {
             // Gone since it was queued: nothing to send.
             syncEngine.state.remove(pendingRecordZoneChanges: [.saveRecord(id)])
             return nil
+        }
+    }
+}
+
+/// Someone on a shared list, as the share screen names them.
+struct SharePerson: Identifiable, Equatable {
+    let id: String
+    var name: String
+    var isOwner: Bool
+    var isMe: Bool
+    /// Invited, and has not opened the list yet.
+    var isWaiting: Bool
+
+    /// What tells one person on a share from another.
+    static func identity(of participant: CKShare.Participant) -> String {
+        participant.userIdentity.userRecordID?.recordName
+            ?? participant.userIdentity.lookupInfo?.emailAddress
+            ?? participant.userIdentity.lookupInfo?.phoneNumber
+            ?? "unknown"
+    }
+
+    /// The name to show for a person iCloud describes this way. iCloud only
+    /// gives a name for people who let themselves be found by it.
+    static func name(components: PersonNameComponents?, email: String?, phone: String?) -> String {
+        if let components {
+            let name = PersonNameComponentsFormatter.localizedString(from: components, style: .default)
+            if !name.trimmingCharacters(in: .whitespaces).isEmpty { return name }
+        }
+        if let email, !email.isEmpty { return email }
+        if let phone, !phone.isEmpty { return phone }
+        return "Someone"
+    }
+
+    /// Everyone on a share: the owner first, then the rest by name.
+    static func people(on share: CKShare) -> [SharePerson] {
+        let me = share.currentUserParticipant.map(identity)
+        return share.participants.map { participant in
+            SharePerson(
+                id: identity(of: participant),
+                name: name(
+                    components: participant.userIdentity.nameComponents,
+                    email: participant.userIdentity.lookupInfo?.emailAddress,
+                    phone: participant.userIdentity.lookupInfo?.phoneNumber
+                ),
+                isOwner: participant.role == .owner,
+                isMe: identity(of: participant) == me,
+                isWaiting: participant.acceptanceStatus != .accepted
+            )
+        }
+        .sorted(by: before)
+    }
+
+    static func before(_ one: SharePerson, _ other: SharePerson) -> Bool {
+        if one.isOwner != other.isOwner { return one.isOwner }
+        return one.name.localizedCaseInsensitiveCompare(other.name) == .orderedAscending
+    }
+
+    /// What stands after the name: who they are to the list.
+    var note: String? {
+        switch (isMe, isOwner, isWaiting) {
+        case (true, true, _): "you, owner"
+        case (true, false, _): "you"
+        case (false, true, _): "owner"
+        case (false, false, true): "invited"
+        default: nil
         }
     }
 }

@@ -401,6 +401,11 @@ struct GuideView: View {
                 struckLines: keeps ? Step.allCases.filter { $0 != .end }.map(\.line) : [],
                 in: first
             )
+            // Saved before the page appears. The page turns undo on, and on
+            // iOS 26 SwiftData stops the app when it is asked to undo a change
+            // to something made before undo was on and not yet saved: every
+            // new user's app stopped here, at the end of the first page.
+            try? context.save()
         }
         finish()
     }

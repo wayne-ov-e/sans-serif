@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 
 /// The settings, as lines of text at the top of the page. A line that is struck
@@ -21,7 +22,10 @@ struct SettingsLines: View {
             // The page on the Lock Screen during working hours, and the hours below it.
             VStack(alignment: .leading, spacing: 2) {
                 SettingLine(name: "Work hours", setting: Setting.workHours, seed: 53)
-                if workHours { HoursLine().transition(.opacity) }
+                if workHours {
+                    HoursLine().transition(.opacity)
+                    ShownListLine().transition(.opacity)
+                }
             }
             .animation(.quick, value: workHours)
             #endif
@@ -187,6 +191,48 @@ private struct SettingLine: View {
         withAnimation(reduceMotion || duration == 0 ? nil : .easeOut(duration: duration)) {
             progress = target
         }
+    }
+}
+
+/// Which list the Live Activity shows, as words under the hours: "showing
+/// the open list", or "showing work". A tap on the name goes to the next
+/// choice: the open list, then each list in turn.
+private struct ShownListLine: View {
+    @Query(sort: TaskList.rowOrder) private var lists: [TaskList]
+    @AppStorage(WorkHours.listKey) private var chosen = ""
+
+    private var chosenID: UUID? {
+        guard let id = UUID(uuidString: chosen), lists.contains(where: { $0.id == id }) else { return nil }
+        return id
+    }
+
+    /// A list that was chosen and has since been deleted reads as the open list.
+    private var name: String {
+        lists.first { $0.id == chosenID }?.name ?? "the open list"
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text("showing").foregroundStyle(.inkFaded)
+            Text(name)
+                .foregroundStyle(.ink)
+                .lineLimit(1)
+                // Pencil dots under a word that can be changed, as under the hours.
+                .underline(pattern: .dot, color: .inkFaded)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle().inset(by: -6))
+                .onTapGesture {
+                    chosen = WorkHours.nextList(after: chosenID, in: lists.map(\.id))?.uuidString ?? ""
+                }
+                .haptic(.selection, trigger: chosen)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Live Activity shows")
+                .accessibilityValue(name)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("Tap for the next list")
+        }
+        .typeStyle(.listName)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

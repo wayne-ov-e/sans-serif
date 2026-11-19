@@ -57,8 +57,12 @@ private struct HorizontalPan: UIGestureRecognizerRepresentable {
 
     func handleUIGestureRecognizerAction(_ recognizer: PenPan, context: Context) {
         let location = context.converter.localLocation
-        let translation = context.converter.localTranslation ?? .zero
-        let velocity = context.converter.localVelocity ?? .zero
+        // How far and how fast, from the recogniser itself. The converter's
+        // own figures cannot be trusted on iOS 18: as a drag begins there it
+        // reports a movement to the left for a finger moving right, and a
+        // strike was taken for the start of a loop and never drawn.
+        let translation = recognizer.translation(in: recognizer.view)
+        let velocity = recognizer.velocity(in: recognizer.view)
         let value = HorizontalDragValue(
             startLocation: CGPoint(x: location.x - translation.x, y: location.y - translation.y),
             location: location,
