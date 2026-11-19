@@ -219,8 +219,10 @@ final class WalkthroughTests: XCTestCase {
         type("Stay here")
         app.buttons["done"].tap()
         XCTAssertTrue(app.buttons["Stay here"].waitForExistence(timeout: 3))
-        Thread.sleep(forTimeInterval: 0.8)
-        let month = Date.now.formatted(.dateTime.month(.wide).year())
+        // The keyboard is still going down.
+        Thread.sleep(forTimeInterval: 1.5)
+        // Nothing has been struck, so this is what the archive would say.
+        let month = "Nothing so far."
 
         for round in 1...3 {
             // Settings down, then one long drag up: far more than it takes to put them away.
@@ -246,6 +248,7 @@ final class WalkthroughTests: XCTestCase {
         if app.buttons["done"].exists { app.buttons["done"].tap() }
         Thread.sleep(forTimeInterval: 0.8)
         drag(from: (0.5, 0.7), to: (0.5, 0.45))
+        wait(for: "Nothing so far.")
         drag(from: (0.5, 0.45), to: (0.5, 0.7))
         XCTAssertTrue(app.buttons["Stay here"].waitForExistence(timeout: 3), "back on the page from the archive")
         drag(from: (0.5, 0.4), to: (0.5, 0.65))
@@ -323,6 +326,54 @@ final class WalkthroughTests: XCTestCase {
         XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label IN %@", ["life", "work", "home", "trips"])).count, 4)
         app.buttons["life"].tap()
         XCTAssertTrue(app.buttons["One"].waitForExistence(timeout: 3), "and the first list is still a tap away")
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    /// The parts the other walks leave out: bringing a task back from the
+    /// archive, and renaming and deleting a list.
+    func testTheArchiveGivesBackAndListsAreRenamedAndDeleted() {
+        XCTAssertTrue(app.buttons["skip"].waitForExistence(timeout: 6))
+        app.buttons["skip"].tap()
+        XCTAssertTrue(app.buttons["life"].waitForExistence(timeout: 5))
+        point(0.5, 0.5).tap()
+        for task in ["Keep\n", "Back"] {
+            type(task)
+            Thread.sleep(forTimeInterval: 1)
+        }
+        app.buttons["done"].tap()
+        XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 3))
+        Thread.sleep(forTimeInterval: 0.8)
+
+        // Struck, it leaves for the archive. Dragged back across there, it is on the page again.
+        drag(acrossLine: "Back")
+        XCTAssertTrue(gone(app.buttons["Back"]), "a struck task leaves the page")
+        drag(from: (0.5, 0.7), to: (0.5, 0.45))
+        wait(for: "Done today")
+        wait(for: "Back")
+        let row = line("Back").frame.midY / app.frame.height
+        drag(from: (0.7, row), to: (0.1, row))
+        drag(from: (0.5, 0.45), to: (0.5, 0.7))
+        XCTAssertTrue(app.buttons["Keep"].waitForExistence(timeout: 3), "pulling down leaves the archive")
+        XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 3), "a task brought back is on the page")
+        XCTAssertNotEqual(app.buttons["Back"].value as? String, "Struck")
+
+        // Rename a list where it stands.
+        app.buttons["home"].press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Rename"].waitForExistence(timeout: 3))
+        app.buttons["Rename"].tap()
+        type("s\n")
+        XCTAssertTrue(app.buttons["homes"].waitForExistence(timeout: 3), "the new name is kept")
+        XCTAssertFalse(app.buttons["home"].exists)
+
+        // Delete it. The app asks first, and Keep changes nothing.
+        app.buttons["homes"].press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Delete list"].waitForExistence(timeout: 3))
+        app.buttons["Delete list"].tap()
+        XCTAssertTrue(app.buttons["Keep"].firstMatch.waitForExistence(timeout: 3), "deleting a list asks first")
+        app.buttons["Yes, delete"].tap()
+        XCTAssertTrue(gone(app.buttons["homes"]), "the list is gone")
+        XCTAssertTrue(app.buttons["life"].exists)
+        XCTAssertTrue(app.buttons["work"].exists)
         XCTAssertEqual(app.state, .runningForeground)
     }
 

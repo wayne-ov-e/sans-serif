@@ -28,6 +28,32 @@ struct ListLogicTests {
         #expect(list.liveCount == 2)
     }
 
+    @Test func todayHasItsOwnPlaceInTheArchiveAndTheMonthsDoNotRepeatIt() throws {
+        let list = try #require(try context.addList(named: "life"))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 11, day: 18, hour: 15))!
+        let earlier = try #require(context.addTask("This morning", to: list))
+        let later = try #require(context.addTask("Just now", to: list))
+        let yesterday = try #require(context.addTask("Yesterday", to: list))
+        let lastMonth = try #require(context.addTask("Last month", to: list))
+        context.addTask("Still to do", to: list)
+        context.strike(earlier, at: now.addingTimeInterval(-6 * 3600))
+        context.strike(later, at: now.addingTimeInterval(-60))
+        context.strike(yesterday, at: now.addingTimeInterval(-24 * 3600))
+        context.strike(lastMonth, at: now.addingTimeInterval(-30 * 24 * 3600))
+
+        #expect(list.doneToday(at: now, calendar: calendar).map(\.text) == ["Just now", "This morning"])
+        let months = list.archive(calendar: calendar, before: now)
+        #expect(months.map { $0.tasks.map(\.text) } == [["Yesterday"], ["Last month"]])
+        // Asked for whole, the archive still holds everything.
+        #expect(list.archive(calendar: calendar).flatMap(\.tasks).count == 4)
+        // An empty archive has neither.
+        let empty = try #require(try context.addList(named: "work"))
+        #expect(empty.doneToday(at: now, calendar: calendar).isEmpty)
+        #expect(empty.archive(calendar: calendar, before: now).isEmpty)
+    }
+
     @Test func strikingMovesATaskToTheArchiveAndRestoringBringsItBack() throws {
         let list = try #require(try context.addList(named: "life"))
         let first = try #require(context.addTask("One", to: list))
@@ -280,6 +306,59 @@ struct PullTrackerTests {
         // The next drag, with settings away, is a new one.
         archive.began(past: 0, offset: -62, isEnabled: true)
         #expect(archive.changed(past: 45, offset: -17) == true)
+    }
+
+    @Test func thePaperIsHeldWhenTheScrollingLetsGoOfItUnderTheFinger() {
+        var tracker = PullTracker(edge: .top)
+        tracker.began(past: 0, offset: -62)
+        let before = tracker.held()
+        #expect(before == nil)
+        let counted = tracker.changed(past: 47, offset: -109)
+        #expect(counted)
+        #expect(tracker.pull.shift == 47)
+        // Following the finger, there is nothing to hold.
+        _ = tracker.changed(past: 61, offset: -123)
+        let following = tracker.held()
+        #expect(following == nil)
+        // Settings arrive, and for a frame or two the sheet reads as back at its edge.
+        _ = tracker.changed(past: 0, offset: -62)
+        let first = tracker.held()
+        #expect(first == 61)
+        _ = tracker.changed(past: 0, offset: -62)
+        let second = tracker.held()
+        #expect(second == 61)
+        // The finger moves, the scrolling has the sheet again, and the hold ends.
+        _ = tracker.changed(past: 46, offset: -108)
+        let resumed = tracker.held()
+        #expect(resumed == 0)
+        // Lifted, the sheet springs back by itself. Nothing is held.
+        _ = tracker.released()
+        _ = tracker.changed(past: 20, offset: -82)
+        let springing = tracker.held()
+        #expect(springing == nil)
+        _ = tracker.changed(past: 0, offset: -62)
+        let rested = tracker.held()
+        #expect(rested == nil)
+        let nothingToLetGo = tracker.letGo()
+        #expect(!nothingToLetGo)
+    }
+
+    @Test func aFingerLiftedWhileThePaperIsHeldLetsItDown() {
+        var tracker = PullTracker(edge: .bottom)
+        tracker.began(past: 0, offset: 0)
+        let counted = tracker.changed(past: 45, offset: 45)
+        #expect(counted)
+        #expect(tracker.pull.shift == -45)
+        _ = tracker.held()
+        _ = tracker.changed(past: 0, offset: 0)
+        let held = tracker.held()
+        // Up past the end, the paper is held above its edge.
+        #expect(held == -45)
+        _ = tracker.released()
+        let letDown = tracker.letGo()
+        #expect(letDown)
+        let again = tracker.letGo()
+        #expect(!again)
     }
 
     @Test func oneDragCountsOnlyOnce() {

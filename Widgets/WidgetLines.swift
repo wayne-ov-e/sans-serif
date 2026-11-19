@@ -12,9 +12,14 @@ struct WidgetTask: View {
     var faded: Color = .inkFaded
     /// On the Lock Screen's small widgets a tap opens the list instead.
     var strikes = true
+    /// In the Live Activity the tap is dealt with by the app.
+    var inActivity = false
 
     var body: some View {
-        if strikes {
+        if strikes, inActivity {
+            Button(intent: StrikeLiveTaskIntent(task: line.id)) { label }
+                .buttonStyle(.plain)
+        } else if strikes {
             Button(intent: StrikeTaskIntent(task: line.id)) { label }
                 .buttonStyle(.plain)
         } else {
@@ -86,16 +91,6 @@ extension UUID {
 extension PageSnapshot.List {
     /// Opens this list in the app.
     var url: URL? { URL(string: "sansserif://list/\(id.uuidString)") }
-
-    /// The list without the lines struck before `date`: they have left for the archive.
-    func leaving(struckBefore date: Date) -> PageSnapshot.List {
-        var list = self
-        list.lines.removeAll { line in
-            guard let struck = line.struck else { return false }
-            return struck < date
-        }
-        return list
-    }
 
     static let sample = PageSnapshot.List(
         id: UUID(),

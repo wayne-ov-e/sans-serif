@@ -24,7 +24,7 @@ struct PageLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 6) {
                         ForEach(list.lines(PageActivityAttributes.lines)) { line in
-                            WidgetTask(line: line, size: 18, ink: .white, faded: .white.opacity(0.5))
+                            WidgetTask(line: line, size: 18, ink: .white, faded: .white.opacity(0.5), inActivity: true)
                         }
                         if list.lines.isEmpty {
                             Text("Nothing left").font(.system(size: 18, design: .serif)).foregroundStyle(.white.opacity(0.5))
@@ -55,7 +55,7 @@ private struct LockScreenPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             ForEach(list.lines(PageActivityAttributes.lines)) { line in
-                WidgetTask(line: line, size: 19)
+                WidgetTask(line: line, size: 19, inActivity: true)
             }
             if list.lines.isEmpty {
                 Text("Nothing left").font(.system(size: 19, design: .serif)).foregroundStyle(.inkFaded)

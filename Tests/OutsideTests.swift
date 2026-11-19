@@ -150,10 +150,10 @@ struct OutsideTests {
 
     @Test func longListsAreCutToWhatAWidgetCanShow() throws {
         let list = try #require(try context.addList(named: "work"))
-        for number in 1...12 { context.addTask("Task \(number)", to: list) }
+        for number in 1...30 { context.addTask("Task \(number)", to: list) }
         let snapshot = try context.pageSnapshot(current: nil)
         #expect(snapshot.lists[0].lines.count == PageSnapshot.linesPerList)
-        #expect(snapshot.lists[0].left == 12)
+        #expect(snapshot.lists[0].left == 30)
     }
 
     @Test func circledTasksComeFirstInTheWidgets() throws {
@@ -216,6 +216,59 @@ struct OutsideTests {
         #expect(!one.isLive)
         #expect(list.liveTasks.map(\.text) == ["Two"])
         #expect(page.pending.isEmpty)
+    }
+
+    @Test func aWidgetDrawnLateStillShowsTheStrikeThenLetsItLeave() throws {
+        let list = try #require(try context.addList(named: "work"))
+        let one = try #require(context.addTask("One", to: list))
+        context.addTask("Two", to: list)
+        let tapped = Date.now
+        page.snapshot = try context.pageSnapshot(current: list.id, at: tapped)
+        page.toggle(task: one.id, at: tapped)
+
+        // The system draws the widget again five seconds after the tap.
+        let drawn = tapped.addingTimeInterval(5)
+        let first = page.timeline(at: drawn)
+        let leaves = try #require(first.leaving[one.id])
+        #expect(leaves == drawn.addingTimeInterval(PageSnapshot.linger))
+        #expect(first.snapshot.lists[0].shown(at: drawn, leaving: first.leaving).lines.map(\.isLive) == [false, true])
+        #expect(first.snapshot.lists[0].shown(at: leaves, leaving: first.leaving).lines.map(\.text) == ["Two"])
+
+        // Drawn again later, the line does not come back.
+        let again = page.timeline(at: drawn.addingTimeInterval(10))
+        #expect(again.leaving[one.id] == leaves)
+        #expect(again.snapshot.lists[0].shown(at: drawn.addingTimeInterval(10), leaving: again.leaving).lines.map(\.text) == ["Two"])
+    }
+
+    @Test func aLineStruckLongAgoIsNotShownAgain() throws {
+        let list = try #require(try context.addList(named: "work"))
+        let one = try #require(context.addTask("One", to: list))
+        let struck = Date.now
+        page.snapshot = try context.pageSnapshot(current: list.id, at: struck)
+        page.toggle(task: one.id, at: struck)
+        let later = struck.addingTimeInterval(PageSnapshot.keep + 1)
+        let timeline = page.timeline(at: later)
+        #expect(timeline.snapshot.lists[0].shown(at: later, leaving: timeline.leaving).lines.isEmpty)
+    }
+
+    @Test func undoingAStrikeForgetsWhenItWasToLeave() throws {
+        let list = try #require(try context.addList(named: "work"))
+        let one = try #require(context.addTask("One", to: list))
+        page.snapshot = try context.pageSnapshot(current: list.id)
+        page.toggle(task: one.id)
+        #expect(page.timeline().leaving[one.id] != nil)
+        page.toggle(task: one.id)
+        #expect(page.timeline().leaving.isEmpty)
+        #expect(page.leaving.isEmpty)
+    }
+
+    @Test func struckLinesDoNotTakeTheRoomOfLiveOnes() throws {
+        let list = try #require(try context.addList(named: "work"))
+        let tasks = (1...30).compactMap { context.addTask("Task \($0)", to: list) }
+        context.strike(tasks[0], at: .now)
+        let lines = try context.pageSnapshot(current: nil).lists[0].lines
+        #expect(lines.count(where: \.isLive) == PageSnapshot.linesPerList)
+        #expect(lines.first?.isLive == false)
     }
 
     @Test func aSecondTapUndoesTheStrike() throws {

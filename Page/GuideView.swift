@@ -237,7 +237,8 @@ struct GuideView: View {
     /// What is done so far, as the archive will show it.
     private var archive: some View {
         VStack(alignment: .leading, spacing: metrics.archiveTaskGap) {
-            Text(Date.now.formatted(.dateTime.month(.wide).year()))
+            // As the archive will show them: struck today.
+            Text("Done today")
                 .typeStyle(.monthLabel)
                 .foregroundStyle(.inkFaded)
                 .accessibilityAddTraits(.isHeader)

@@ -1,8 +1,9 @@
 import SwiftData
 import SwiftUI
 
-/// What is done: a list's struck tasks, grouped by month, newest first.
-/// The current month is open. Past months fold into one line each; tap a month
+/// What is done: what was struck today under a heading of its own, then a
+/// list's older struck tasks, grouped by month, newest first. An empty
+/// archive says "Nothing so far.". The current month is open. Past months fold into one line each; tap a month
 /// to open or fold it. Drag back across a task, right to left, to restore it.
 struct ArchiveLines: View {
     let list: TaskList
@@ -15,32 +16,53 @@ struct ArchiveLines: View {
     @State private var opened: [Date: Bool] = [:]
 
     var body: some View {
-        let months = list.archive()
+        let today = list.doneToday()
+        let months = list.archive(before: .now)
         VStack(alignment: .leading, spacing: 0) {
+            if today.isEmpty, months.isEmpty {
+                // An empty archive says so, in the voice of a heading.
+                Text("Nothing so far.")
+                    .typeStyle(.monthLabel)
+                    .foregroundStyle(.inkFaded)
+            }
+            if !today.isEmpty {
+                // Today has a heading of its own, above the months, and is always open.
+                VStack(alignment: .leading, spacing: metrics.archiveTaskGap) {
+                    Text("Done today")
+                        .typeStyle(.monthLabel)
+                        .foregroundStyle(.inkFaded)
+                        .accessibilityAddTraits(.isHeader)
+                        .fadesUnderListNames()
+                    ForEach(today) { task in line(task) }
+                }
+                .padding(.bottom, months.isEmpty ? 0 : metrics.monthGap)
+            }
             ForEach(Array(months.enumerated()), id: \.element.id) { index, month in
                 let isOpen = isOpen(month)
                 VStack(alignment: .leading, spacing: metrics.archiveTaskGap) {
                     label(month, isOpen: isOpen)
                     if isOpen {
-                        ForEach(month.tasks) { task in
-                            TaskLine(
-                                task: task,
-                                focus: focus,
-                                editingID: .constant(nil),
-                                actions: StrikeActions(
-                                    strike: { _, _ in }, pauseHold: { _ in }, resumeHold: { _ in }, restore: restore
-                                ),
-                                strikeColor: .inkFaded
-                            )
-                            .fadesUnderListNames()
-                            .transition(.opacity)
-                        }
+                        ForEach(month.tasks) { task in line(task) }
                     }
                 }
                 .padding(.top, gap(above: index, in: months))
             }
         }
         .padding(.bottom, metrics.taskGap)
+    }
+
+    private func line(_ task: TaskItem) -> some View {
+        TaskLine(
+            task: task,
+            focus: focus,
+            editingID: .constant(nil),
+            actions: StrikeActions(
+                strike: { _, _ in }, pauseHold: { _ in }, resumeHold: { _ in }, restore: restore
+            ),
+            strikeColor: .inkFaded
+        )
+        .fadesUnderListNames()
+        .transition(.opacity)
     }
 
     private func label(_ month: ArchiveMonth, isOpen: Bool) -> some View {

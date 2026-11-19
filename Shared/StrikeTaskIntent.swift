@@ -5,8 +5,12 @@ import WidgetKit
 import ActivityKit
 #endif
 
-/// A tap on a task in a widget or in the Live Activity. It strikes the task
-/// without opening the app, and a second tap before the line leaves undoes it.
+/// A tap on a task in a widget. It strikes the task without opening the app,
+/// and a second tap before the line leaves undoes it.
+///
+/// It runs in the widget itself and only writes to the shared drawer, so the
+/// widget is drawn again at once. The app takes the change into its store, and
+/// on to iCloud, the next time it runs.
 struct StrikeTaskIntent: AppIntent {
     static let title: LocalizedStringResource = "Strike task"
     static let description = IntentDescription("Strikes a task, or undoes the strike.")
@@ -25,8 +29,38 @@ struct StrikeTaskIntent: AppIntent {
         if let id = UUID(uuidString: task) {
             SharedPage.shared.toggle(task: id)
         }
-        // In the app, the change goes into the store and to the Live Activity
-        // now. In the widget's own process it waits for the app.
+        // If this does run in the app, the change goes into the store now.
+        await OutsideChanges.handler?()
+        WidgetCenter.shared.reloadAllTimelines()
+        return .result()
+    }
+}
+
+/// The same tap in the Live Activity. A button there runs its intent in the
+/// app, so the store and the Live Activity change at once.
+///
+/// The widgets must not use this one. For an intent that may start a Live
+/// Activity the system waits three seconds, in case one starts, before it
+/// draws a widget again: a tapped task sat there unchanged for three seconds
+/// and then was simply gone.
+struct StrikeLiveTaskIntent: AppIntent {
+    static let title: LocalizedStringResource = "Strike task in the Live Activity"
+    static let description = IntentDescription("Strikes a task, or undoes the strike.")
+    static let isDiscoverable = false
+
+    @Parameter(title: "Task")
+    var task: String
+
+    init() {}
+
+    init(task: UUID) {
+        self.task = task.uuidString
+    }
+
+    func perform() async throws -> some IntentResult {
+        if let id = UUID(uuidString: task) {
+            SharedPage.shared.toggle(task: id)
+        }
         await OutsideChanges.handler?()
         WidgetCenter.shared.reloadAllTimelines()
         return .result()
@@ -34,8 +68,7 @@ struct StrikeTaskIntent: AppIntent {
 }
 
 #if canImport(ActivityKit) && os(iOS)
-// A button in a Live Activity runs its intent in the app, not in the widget.
-extension StrikeTaskIntent: LiveActivityIntent {}
+extension StrikeLiveTaskIntent: LiveActivityIntent {}
 #endif
 
 /// What the app does when something was struck outside it. Empty in the widget.

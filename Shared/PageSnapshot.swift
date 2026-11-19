@@ -30,11 +30,70 @@ struct PageSnapshot: Codable, Equatable, Sendable {
     /// The list last open in the app.
     var current: UUID?
 
-    /// As many lines of each list as the largest widget can show.
-    static let linesPerList = 8
+    /// Twice as many live lines of each list as the largest widget can show.
+    /// A widget strikes tasks without the app, so it needs the next ones to
+    /// bring up in their place.
+    static let linesPerList = 16
+    /// A struck line stays where it is showing for this long, struck, then leaves.
+    static let linger: TimeInterval = 2.5
+    /// A struck line stays in the snapshot for this long, so that a widget
+    /// drawn late still has it to show. The system can take seconds to draw a
+    /// widget again after a tap, and a line that had already been taken out
+    /// by then was never seen struck at all.
+    static let keep: TimeInterval = 30
 
     func list(_ id: UUID?) -> List? {
         lists.first { $0.id == id } ?? lists.first { $0.id == current } ?? lists.first
+    }
+}
+
+extension PageSnapshot.List {
+    /// The list without the lines struck before `date`: they have left for the archive.
+    func leaving(struckBefore date: Date) -> PageSnapshot.List {
+        var list = self
+        list.lines.removeAll { line in
+            guard let struck = line.struck else { return false }
+            return struck < date
+        }
+        return list
+    }
+
+    /// The list as a widget shows it at `date`, given when each struck line leaves.
+    func shown(at date: Date, leaving: [UUID: Date]) -> PageSnapshot.List {
+        var list = self
+        list.lines.removeAll { line in
+            guard line.struck != nil else { return false }
+            return (leaving[line.id] ?? .distantPast) <= date
+        }
+        return list
+    }
+}
+
+extension PageSnapshot {
+    /// The snapshot without the lines struck before `date`.
+    func leaving(struckBefore date: Date) -> PageSnapshot {
+        var snapshot = self
+        snapshot.lists = lists.map { $0.leaving(struckBefore: date) }
+        return snapshot
+    }
+
+    /// When each struck line leaves the widgets. A line a widget has not drawn
+    /// struck yet stays for a moment from `now`, the moment it is drawn, and
+    /// not from the moment it was struck: the two can be seconds apart. A line
+    /// already given a time keeps it, so drawing again does not bring it back.
+    func leaving(known: [UUID: Date], at now: Date) -> [UUID: Date] {
+        var leaving: [UUID: Date] = [:]
+        for line in lists.flatMap(\.lines) {
+            guard let struck = line.struck else { continue }
+            if let date = known[line.id] {
+                leaving[line.id] = date
+            } else if now.timeIntervalSince(struck) < Self.keep {
+                leaving[line.id] = now.addingTimeInterval(Self.linger)
+            } else {
+                leaving[line.id] = .distantPast
+            }
+        }
+        return leaving
     }
 }
 
@@ -63,6 +122,7 @@ struct SharedPage: @unchecked Sendable {
 
     private static let snapshotKey = "pageSnapshot"
     private static let pendingKey = "pendingChanges"
+    private static let leavingKey = "leaving"
 
     private func read(_ key: String) -> Data? {
         guard let directory else { return defaults.data(forKey: key) }
@@ -100,6 +160,25 @@ struct SharedPage: @unchecked Sendable {
         nonmutating set { write(try? JSONEncoder().encode(newValue), Self.pendingKey) }
     }
 
+    /// When each struck line leaves the widgets. The widgets write this as they draw.
+    var leaving: [UUID: Date] {
+        get {
+            guard let data = read(Self.leavingKey) else { return [:] }
+            return (try? JSONDecoder().decode([UUID: Date].self, from: data)) ?? [:]
+        }
+        nonmutating set { write(newValue.isEmpty ? nil : try? JSONEncoder().encode(newValue), Self.leavingKey) }
+    }
+
+    /// The lists as the widgets show them from `now`: first as they are, then
+    /// once more each time a struck line leaves.
+    func timeline(at now: Date = .now) -> (snapshot: PageSnapshot, leaving: [UUID: Date]) {
+        let snapshot = snapshot
+        let known = leaving
+        let leaving = snapshot.leaving(known: known, at: now)
+        if leaving != known { self.leaving = leaving }
+        return (snapshot, leaving)
+    }
+
     /// A tap on a task outside the app: struck if it was live, live again if
     /// it was struck. The line changes at once where it is showing, and the
     /// app takes the change into its store the next time it runs.
@@ -128,5 +207,6 @@ struct SharedPage: @unchecked Sendable {
     func reset() {
         write(nil, Self.snapshotKey)
         write(nil, Self.pendingKey)
+        write(nil, Self.leavingKey)
     }
 }

@@ -15,11 +15,23 @@ extension TaskList {
         (tasks ?? []).count(where: \.isLive)
     }
 
+    /// What was struck today, most recently struck first. The archive shows it
+    /// first, under its own heading, above the months.
+    func doneToday(at now: Date = .now, calendar: Calendar = .current) -> [TaskItem] {
+        (tasks ?? [])
+            .filter { task in task.struckDate.map { calendar.isDate($0, inSameDayAs: now) } ?? false }
+            .sorted { ($0.struckDate ?? .distantPast) > ($1.struckDate ?? .distantPast) }
+    }
+
     /// The archive is a query: tasks with a struck date, grouped by month, newest first.
-    func archive(calendar: Calendar = .current) -> [ArchiveMonth] {
+    /// With `before`, only what was struck before the start of that day: the
+    /// months below "Done today", which do not repeat it.
+    func archive(calendar: Calendar = .current, before day: Date? = nil) -> [ArchiveMonth] {
+        let cutoff = day.map { calendar.startOfDay(for: $0) }
         let struck = (tasks ?? []).compactMap { task in
             task.struckDate.map { (task: task, date: $0) }
         }
+        .filter { entry in cutoff.map { entry.date < $0 } ?? true }
         let byMonth = Dictionary(grouping: struck) { entry in
             calendar.dateInterval(of: .month, for: entry.date)?.start ?? entry.date
         }

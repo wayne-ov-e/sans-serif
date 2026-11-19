@@ -64,8 +64,6 @@ struct TaskLine: View {
     @State private var circles = 0
     /// Where the finger has been, while a drag that began as a strike turns into a loop.
     @State private var loop: [CGPoint] = []
-    /// The loop set off to the right, as a strike does.
-    @State private var loopBeganAsStrike = false
 
     private enum Drag { case striking, undoing, circling, ignored }
 
@@ -170,18 +168,14 @@ struct TaskLine: View {
         }
 
         switch drag {
-        case .striking where abs(value.translation.height) > Self.loopRise:
-            // The pen has left the line: this is a loop round the task, not a
-            // strike. The line that was begun is taken back.
-            drag = .circling
-            loopBeganAsStrike = true
-            loop = [value.startLocation, value.location]
-            isArmed = false
-            PenHaptics.shared.stop()
-            retract()
         case .circling:
             loop.append(value.location)
         case .striking:
+            // The way the pen went is kept, in case it turns out to be a loop
+            // round the task. The line is drawn all the same and never taken
+            // back part way: a strike that wanders must still look like one.
+            if loop.isEmpty { loop = [value.startLocation] }
+            loop.append(value.location)
             // An Apple Pencil's pressure sets how thick the line is.
             if let pressure = value.pressure, !strokes.isEmpty {
                 strokes[0].weight = Stroke.weight(forPressure: pressure)
@@ -225,7 +219,6 @@ struct TaskLine: View {
             // A drag to the left on a live task strikes nothing, so it can only
             // be the start of a loop, drawn the other way round.
             drag = .circling
-            loopBeganAsStrike = false
             loop = [value.startLocation, value.location]
             actions.dragBegan()
         } else if !task.isLive, value.translation.width < 0 {
@@ -247,6 +240,11 @@ struct TaskLine: View {
         guard let line = lines.first else { return }
 
         switch drag {
+        case .striking where Self.closes(loop + [value.location]):
+            // The pen went round the words and came back: a circle, not a strike.
+            PenHaptics.shared.stop()
+            retract()
+            context.toggleCircle(task)
         case .striking:
             // Commit when the drag has passed most of the text. Otherwise the line retracts.
             if willStrike(value, on: line) {
@@ -270,12 +268,7 @@ struct TaskLine: View {
             }
         case .circling:
             // Round the words: the task is circled, or its circle cleared.
-            if Self.closes(loop + [value.location]) {
-                context.toggleCircle(task)
-            } else if loopBeganAsStrike, value.translation.width >= min((line.maxX - line.minX) * 0.4, 90) {
-                // Not a loop after all, only a strike that wandered off the line. It still counts.
-                strikeWithoutDrag()
-            }
+            if Self.closes(loop + [value.location]) { context.toggleCircle(task) }
         case .ignored, nil:
             PenHaptics.shared.stop()
         }

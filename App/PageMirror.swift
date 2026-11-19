@@ -3,26 +3,29 @@ import SwiftData
 import WidgetKit
 
 extension ModelContext {
-    /// A struck task stays in the widgets for this long, struck, then leaves.
-    static let widgetLinger: TimeInterval = 2.5
-
-    /// The page as the widgets and the Live Activity show it.
+    /// The page as the widgets show it. Tasks struck a moment ago are still
+    /// in it, struck: each widget shows them so, then lets them leave.
     func pageSnapshot(current: UUID?, at now: Date = .now) throws -> PageSnapshot {
         PageSnapshot(
             lists: try lists().map { list in
                 let tasks = (list.tasks ?? []).sorted { $0.order < $1.order }
                 let shown = tasks.filter { task in
                     guard let struck = task.struckDate else { return true }
-                    return now.timeIntervalSince(struck) < Self.widgetLinger
+                    return now.timeIntervalSince(struck) < PageSnapshot.keep
+                }
+                // Circled tasks come first, in the order they were circled. The rest keep page order.
+                let ordered = shown.filter(\.isCircled).sorted { ($0.circledDate ?? .distantPast) < ($1.circledDate ?? .distantPast) }
+                    + shown.filter { !$0.isCircled }
+                // As many live lines as a widget can show, and the struck ones among them.
+                var live = 0
+                let lines = ordered.prefix { task in
+                    if task.isLive { live += 1 }
+                    return live <= PageSnapshot.linesPerList
                 }
                 return PageSnapshot.List(
                     id: list.id,
                     name: list.name,
-                    // Circled tasks come first, in the order they were circled. The rest keep page order.
-                    lines: (shown.filter(\.isCircled).sorted { ($0.circledDate ?? .distantPast) < ($1.circledDate ?? .distantPast) }
-                        + shown.filter { !$0.isCircled }).prefix(PageSnapshot.linesPerList).map {
-                        PageSnapshot.Line(id: $0.id, text: $0.text, struck: $0.struckDate)
-                    },
+                    lines: lines.map { PageSnapshot.Line(id: $0.id, text: $0.text, struck: $0.struckDate) },
                     left: tasks.count(where: \.isLive)
                 )
             },
@@ -81,7 +84,7 @@ final class PageMirror {
     private func outsideChange() async {
         refresh()
         Task { @MainActor in
-            try? await Task.sleep(for: .seconds(ModelContext.widgetLinger + 0.1))
+            try? await Task.sleep(for: .seconds(PageSnapshot.linger + 0.1))
             refresh()
         }
     }
@@ -94,6 +97,7 @@ final class PageMirror {
             page.snapshot = snapshot
             WidgetCenter.shared.reloadAllTimelines()
         }
-        WorkHoursActivity.sync(snapshot)
+        // The Live Activity is drawn at once, so there a struck line leaves a moment after the strike.
+        WorkHoursActivity.sync(snapshot.leaving(struckBefore: Date.now.addingTimeInterval(-PageSnapshot.linger)))
     }
 }

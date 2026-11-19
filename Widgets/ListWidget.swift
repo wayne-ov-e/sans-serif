@@ -48,35 +48,35 @@ struct ListEntry: TimelineEntry {
 }
 
 struct ListProvider: AppIntentTimelineProvider {
-    /// A struck task stays for this long, struck, then leaves.
-    private static let linger: TimeInterval = 2.5
-
     func placeholder(in context: Context) -> ListEntry {
         ListEntry(date: .now, list: .sample)
     }
 
     func snapshot(for configuration: SelectListIntent, in context: Context) async -> ListEntry {
-        ListEntry(date: .now, list: context.isPreview ? .sample : list(for: configuration))
+        if context.isPreview { return ListEntry(date: .now, list: .sample) }
+        let now = Date.now
+        let page = SharedPage.shared.timeline(at: now)
+        return ListEntry(date: now, list: list(for: configuration, in: page.snapshot)?.shown(at: now, leaving: page.leaving))
     }
 
     func timeline(for configuration: SelectListIntent, in context: Context) async -> Timeline<ListEntry> {
         let now = Date.now
-        guard let list = list(for: configuration) else {
+        let page = SharedPage.shared.timeline(at: now)
+        guard let list = list(for: configuration, in: page.snapshot) else {
             return Timeline(entries: [ListEntry(date: now, list: nil)], policy: .never)
         }
-        // Lines struck a while ago have already left.
-        let shown = list.leaving(struckBefore: now.addingTimeInterval(-Self.linger))
-        var entries = [ListEntry(date: now, list: shown)]
-        // The ones struck just now leave together, a moment after the last.
-        if let last = shown.lines.compactMap(\.struck).max() {
-            entries.append(ListEntry(date: last.addingTimeInterval(Self.linger), list: shown.leaving(struckBefore: .distantFuture)))
-        }
+        // Struck lines show struck from now, whenever they were struck, and
+        // leave a moment later. Counting from the strike itself did not work:
+        // the system draws a widget again some seconds after a tap, and by
+        // then the moment was over and the line was gone without being seen.
+        let leaves = Set(list.lines.compactMap { page.leaving[$0.id] }.filter { $0 > now }).sorted()
+        let entries = ([now] + leaves).map { ListEntry(date: $0, list: list.shown(at: $0, leaving: page.leaving)) }
         // The app and a tap on a task ask for a new timeline. Nothing else changes it.
         return Timeline(entries: entries, policy: .never)
     }
 
-    private func list(for configuration: SelectListIntent) -> PageSnapshot.List? {
-        SharedPage.shared.snapshot.list(configuration.list.flatMap { UUID(uuidString: $0.id) })
+    private func list(for configuration: SelectListIntent, in snapshot: PageSnapshot) -> PageSnapshot.List? {
+        snapshot.list(configuration.list.flatMap { UUID(uuidString: $0.id) })
     }
 }
 

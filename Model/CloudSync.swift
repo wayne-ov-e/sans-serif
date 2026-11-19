@@ -18,7 +18,7 @@ import SwiftData
 final class CloudSync {
     static let shared = CloudSync()
 
-    private let container = CKContainer(identifier: PageStore.cloudContainer)
+    private lazy var container = CKContainer(identifier: PageStore.cloudContainer)
     private var context: ModelContext?
     private var mine: CKSyncEngine?
     private var theirs: CKSyncEngine?
@@ -32,7 +32,19 @@ final class CloudSync {
     /// The zone of each list, kept for the moment a list is deleted.
     private var zoneOfList: [UUID: CKRecordZone.ID] = [:]
 
+    /// Identities to treat as having a change waiting to be sent. The tests
+    /// have no engine to ask, and say here what one would be holding.
+    var heldBack: Set<CKRecord.ID> = []
+
     private static let nameKey = "cloudSync.myName"
+
+    init() {}
+
+    /// A sync with a store and no engines: what iCloud says can be written
+    /// into the store, and nothing is sent. For the tests.
+    init(storingIn context: ModelContext) {
+        self.context = context
+    }
 
     /// The user's name as iCloud gives it to people they share with. Known
     /// once a shared list has been opened.
@@ -85,6 +97,21 @@ final class CloudSync {
 
     private func lists() -> [TaskList] { (try? context?.fetch(FetchDescriptor<TaskList>())) ?? [] }
     private func tasks() -> [TaskItem] { (try? context?.fetch(FetchDescriptor<TaskItem>())) ?? [] }
+
+    /// One list or task by its identity, asked of the store directly. Reading
+    /// every task to find one made a large fetch from iCloud slower with the
+    /// square of its size.
+    private func list(_ id: UUID) -> TaskList? {
+        var one = FetchDescriptor<TaskList>(predicate: #Predicate { $0.id == id })
+        one.fetchLimit = 1
+        return (try? context?.fetch(one))?.first
+    }
+
+    private func task(_ id: UUID) -> TaskItem? {
+        var one = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })
+        one.fetchLimit = 1
+        return (try? context?.fetch(one))?.first
+    }
 
     // MARK: What changed here
 
@@ -142,14 +169,14 @@ final class CloudSync {
     // MARK: Sending
 
     /// The record to send for an identity iCloud is waiting on, or nothing if it is gone.
-    fileprivate func record(for id: CKRecord.ID) -> CKRecord? {
+    func record(for id: CKRecord.ID) -> CKRecord? {
         guard let uuid = UUID(uuidString: id.recordName) else { return nil }
-        if let list = lists().first(where: { $0.id == uuid }), list.zoneID == id.zoneID {
+        if let list = list(uuid), list.zoneID == id.zoneID {
             let record = RecordCoder.record(type: RecordCoder.listType, id: id, systemFields: list.recordData)
             RecordCoder.write(list.fields, to: record)
             return record
         }
-        if let task = tasks().first(where: { $0.id == uuid }), task.list?.zoneID == id.zoneID {
+        if let task = task(uuid), task.list?.zoneID == id.zoneID {
             let record = RecordCoder.record(type: RecordCoder.taskType, id: id, systemFields: task.recordData)
             RecordCoder.write(task.fields, to: record)
             return record
@@ -200,7 +227,7 @@ final class CloudSync {
     }
 
     /// Runs changes that come from iCloud, saved without being sent back to it.
-    private func applying(_ changes: () -> Void) {
+    func applying(_ changes: () -> Void) {
         // What the user changed and the store has not saved yet is theirs, and
         // is saved first, so that it is sent and not taken for iCloud's.
         try? context?.save()
@@ -210,16 +237,19 @@ final class CloudSync {
         isApplying = false
     }
 
-    private func take(list record: CKRecord) {
+    func take(list record: CKRecord) {
         guard let context, let id = UUID(uuidString: record.recordID.recordName) else { return }
         let zone = record.recordID.zoneID
-        let list = lists().first { $0.id == id } ?? {
+        let list = list(id) ?? {
             let new = TaskList(name: "", order: 0)
             new.id = id
             context.insert(new)
             return new
         }()
-        list.fields = RecordCoder.listFields(of: record)
+        // A change made here and not yet sent is newer than anything iCloud
+        // can be sending back, which may only be the echo of an earlier save.
+        // It stands, and goes out on top of what iCloud has.
+        if !isWaitingToSend(record.recordID) { list.fields = RecordCoder.listFields(of: record) }
         list.recordData = RecordCoder.systemFields(of: record)
         if zone.ownerName != CKCurrentUserDefaultName {
             list.zoneOwner = zone.ownerName
@@ -228,13 +258,13 @@ final class CloudSync {
         zoneOfList[id] = zone
     }
 
-    private func take(task record: CKRecord) {
+    func take(task record: CKRecord) {
         guard let context, let id = UUID(uuidString: record.recordID.recordName),
               let listID = RecordCoder.listID(fromZone: record.recordID.zoneID.zoneName)
         else { return }
         let zone = record.recordID.zoneID
         // A task can arrive before its list. The list is made now and named when its own record comes.
-        let list = lists().first { $0.id == listID } ?? {
+        let list = self.list(listID) ?? {
             let new = TaskList(name: "", order: Double(lists().count))
             new.id = listID
             if zone.ownerName != CKCurrentUserDefaultName {
@@ -246,30 +276,42 @@ final class CloudSync {
             return new
         }()
         let fields = RecordCoder.taskFields(of: record)
-        let task = tasks().first { $0.id == id } ?? {
+        let task = self.task(id) ?? {
             let new = TaskItem(text: fields.text, order: fields.order, list: list)
             new.id = id
             context.insert(new)
             return new
         }()
-        task.fields = fields
+        // As for lists: a strike made a moment ago must not be undone by the
+        // echo of the save before it (build 18 lost strikes this way).
+        if !isWaitingToSend(record.recordID) { task.fields = fields }
         if task.list !== list { task.list = list }
         task.recordData = RecordCoder.systemFields(of: record)
         zoneOfTask[id] = zone
     }
 
-    private func remove(_ id: CKRecord.ID, type: CKRecord.RecordType) {
+    /// A change to this record is queued and has not gone out yet.
+    private func isWaitingToSend(_ id: CKRecord.ID) -> Bool {
+        if heldBack.contains(id) { return true }
+        guard let engine = engine(for: id.zoneID) else { return false }
+        return engine.state.pendingRecordZoneChanges.contains { change in
+            if case .saveRecord(let waiting) = change { return waiting == id }
+            return false
+        }
+    }
+
+    func remove(_ id: CKRecord.ID, type: CKRecord.RecordType) {
         guard let context, let uuid = UUID(uuidString: id.recordName) else { return }
-        if type == RecordCoder.taskType, let task = tasks().first(where: { $0.id == uuid }),
+        if type == RecordCoder.taskType, let task = task(uuid),
            task.list?.zoneID == id.zoneID {
             zoneOfTask[uuid] = nil
             context.delete(task)
         }
     }
 
-    private func removeList(in zone: CKRecordZone.ID) {
+    func removeList(in zone: CKRecordZone.ID) {
         guard let context, let id = RecordCoder.listID(fromZone: zone.zoneName),
-              let list = lists().first(where: { $0.id == id }), list.zoneID == zone
+              let list = list(id), list.zoneID == zone
         else { return }
         // The last list is never removed: there would be no page left.
         guard lists().count > 1 else {
@@ -283,13 +325,13 @@ final class CloudSync {
         context.delete(list)
     }
 
-    private func rememberSystemFields(of record: CKRecord) {
+    func rememberSystemFields(of record: CKRecord) {
         guard let id = UUID(uuidString: record.recordID.recordName) else { return }
         let data = RecordCoder.systemFields(of: record)
         if record.recordType == RecordCoder.listType {
-            lists().first { $0.id == id }?.recordData = data
+            list(id)?.recordData = data
         } else {
-            tasks().first { $0.id == id }?.recordData = data
+            task(id)?.recordData = data
         }
     }
 
@@ -298,9 +340,13 @@ final class CloudSync {
         let id = failure.record.recordID
         switch failure.error.code {
         case .serverRecordChanged:
-            // Someone else changed it first. Theirs stands: the last change to reach iCloud wins.
+            // iCloud has a newer copy than the one this change was made on. Most
+            // often that is our own earlier save, still on its way when this one
+            // was made. What iCloud has is noted, and the change is sent again on
+            // top of it: the last change to reach iCloud wins.
             guard let server = failure.error.serverRecord else { return }
-            if server.recordType == RecordCoder.listType { take(list: server) } else { take(task: server) }
+            rememberSystemFields(of: server)
+            engine.state.add(pendingRecordZoneChanges: [.saveRecord(id)])
         case .zoneNotFound, .userDeletedZone:
             // The zone has to exist before anything can be written in it.
             if id.zoneID.ownerName == CKCurrentUserDefaultName {
@@ -310,8 +356,8 @@ final class CloudSync {
         case .unknownItem:
             // iCloud no longer has the record this was a change to. It is written afresh.
             if let uuid = UUID(uuidString: id.recordName) {
-                lists().first { $0.id == uuid }?.recordData = nil
-                tasks().first { $0.id == uuid }?.recordData = nil
+                list(uuid)?.recordData = nil
+                task(uuid)?.recordData = nil
             }
             engine.state.add(pendingRecordZoneChanges: [.saveRecord(id)])
         default:

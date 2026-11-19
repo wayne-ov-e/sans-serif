@@ -223,7 +223,9 @@ private struct HoursLine: View {
                     .transition(.opacity)
             }
         }
-        .animation(.quick, value: capNotes > 0)
+        // The note fades by the changes below, not by an animation laid over
+        // the whole line: over an hour being typed, that kept the app from
+        // ever coming to rest, and a UI test waited a minute at every step.
         .typeStyle(.listName)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -231,11 +233,11 @@ private struct HoursLine: View {
     private func set(_ new: WorkHours) {
         // Both ends moved and the hours are at their longest: one was pushed along by the other.
         if new.start != start, new.end != end, new.length == WorkHours.longest {
-            capNotes += 1
+            withAnimation(.quick) { capNotes += 1 }
             let shown = capNotes
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(3))
-                if capNotes == shown { capNotes = 0 }
+                if capNotes == shown { withAnimation(.quick) { capNotes = 0 } }
             }
         }
         start = new.start

@@ -7,9 +7,15 @@ struct PagePreview: View {
 
     @Environment(\.pageMetrics) private var metrics
 
+    /// More than the tallest window shows at the smallest type.
+    static let linesShown = 40
+
     var body: some View {
         VStack(alignment: .leading, spacing: metrics.taskGap) {
-            ForEach(list.liveTasks) { task in
+            // Only what a screen can show. These pages stand off the edge of the
+            // paper at all times, one for every other list, so a long list must
+            // not cost its whole length there.
+            ForEach(list.liveTasks.prefix(Self.linesShown)) { task in
                 Text(task.text)
                     .typeStyle(.task)
                     .foregroundStyle(.ink)
