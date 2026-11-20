@@ -61,13 +61,16 @@ struct DragTicks: Equatable {
 extension View {
     /// A sheet that comes or goes is felt once, at the instant the pull counts:
     /// short and crisp, as the sheet starts to move.
-    func sheetHaptics(_ isShowing: Bool) -> some View {
-        modifier(SheetHaptics(isShowing: isShowing))
+    /// `quietly`: the sheet is put away by something that is felt already, a
+    /// turn to another list, and says nothing of its own.
+    func sheetHaptics(_ isShowing: Bool, quietly: Bool = false) -> some View {
+        modifier(SheetHaptics(isShowing: isShowing, quietly: quietly))
     }
 }
 
 private struct SheetHaptics: ViewModifier {
     let isShowing: Bool
+    var quietly = false
     /// Counted where the crisp haptic cannot be played, for one plain tap instead.
     @State private var taps = 0
 
@@ -75,6 +78,7 @@ private struct SheetHaptics: ViewModifier {
         content
             .haptic(.detent, trigger: taps)
             .onChange(of: isShowing) {
+                guard !quietly else { return }
                 if !PenHaptics.shared.snap() { taps += 1 }
             }
     }

@@ -137,6 +137,8 @@ private struct NameField: View {
 
     @Environment(\.pageMetrics) private var metrics
     @State private var text = ""
+    /// The name has been kept, so it is not kept a second time.
+    @State private var isKept = false
 
     private var field: PageView.Field { .listName(list.id) }
 
@@ -161,8 +163,16 @@ private struct NameField: View {
             .onChange(of: focus.wrappedValue) { old, new in
                 // Whatever ends the writing, the name is kept. A blank name changes nothing.
                 guard old == field, new != field else { return }
+                isKept = true
                 rename(list, text)
                 renamingID = nil
+            }
+            // Taken away before the writing was seen to end, as when another
+            // list is renamed at once: what was typed is still kept.
+            .onDisappear {
+                guard !isKept else { return }
+                isKept = true
+                rename(list, text)
             }
             .accessibilityLabel("List name")
     }

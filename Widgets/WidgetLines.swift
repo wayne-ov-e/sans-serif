@@ -17,10 +17,10 @@ struct WidgetTask: View {
 
     var body: some View {
         if strikes, inActivity {
-            Button(intent: StrikeLiveTaskIntent(task: line.id)) { label }
+            Button(intent: StrikeLiveTaskIntent(task: line.id, wasLive: line.isLive)) { label }
                 .buttonStyle(.plain)
         } else if strikes {
-            Button(intent: StrikeTaskIntent(task: line.id)) { label }
+            Button(intent: StrikeTaskIntent(task: line.id, wasLive: line.isLive)) { label }
                 .buttonStyle(.plain)
         } else {
             label

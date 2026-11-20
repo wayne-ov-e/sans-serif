@@ -84,7 +84,7 @@ struct GuideLine: View {
             .contentShape(Rectangle())
             .onHorizontalDrag(onChanged: dragChanged, onEnded: dragEnded)
             .haptic(.drag, trigger: ticks)
-            .animation(.easeOut(duration: 0.25), value: isStruck)
+            .animation(.ink, value: isStruck)
             .onAppear {
                 guard writesIn, !reduceMotion else {
                     written = 1

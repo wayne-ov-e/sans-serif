@@ -7,6 +7,9 @@ struct SansSerifApp: App {
     #if os(iOS)
     /// Hears an invitation to a shared list being opened.
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    #elseif os(macOS)
+    /// The same on the Mac, where the invitation comes to the app itself.
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     #endif
 
     init() {
@@ -62,6 +65,12 @@ struct SansSerifApp: App {
             PageMirror.shared.start(context: context)
             // And iCloud, for the user's other devices and for shared lists.
             if syncs, !isTest { CloudSync.shared.start(context: context) }
+            #if !DEBUG
+            // With the iCloud sync line struck, what is changed is noted, to
+            // be sent when it is back. Not in a development build, whose
+            // synced store is another one.
+            if !syncs, !isTest { CloudSync.shared.noteChangesWithoutSync(context: context) }
+            #endif
             #if DEBUG
             // Tries the first step of sharing and says in the console how it went.
             // With `-previewShare`, the last list is one someone else shared, to

@@ -8,6 +8,11 @@ import SwiftUI
 struct ArchiveLines: View {
     let list: TaskList
     var focus: FocusState<PageView.Field?>.Binding
+    /// The struck task that is held, with its menu at the bottom of the page.
+    var menuTaskID: UUID?
+    /// A hold on a struck task opens its menu: put it back, copy it, delete it.
+    var openMenu: (TaskItem) -> Void = { _ in }
+    var closeMenu: () -> Void = {}
 
     @Environment(\.modelContext) private var context
     @Environment(\.pageMetrics) private var metrics
@@ -49,6 +54,12 @@ struct ArchiveLines: View {
             }
         }
         .padding(.bottom, metrics.taskGap)
+        // A tap anywhere but on the menu puts it away.
+        .contentShape(Rectangle())
+        .onTapGesture { if menuTaskID != nil { closeMenu() } }
+        // The menu opening is felt, as it is on the page.
+        .haptic(.pen, trigger: menuTaskID) { $0 != nil }
+        .animation(.quick, value: menuTaskID)
     }
 
     private func line(_ task: TaskItem) -> some View {
@@ -59,9 +70,16 @@ struct ArchiveLines: View {
             actions: StrikeActions(
                 strike: { _, _ in }, pauseHold: { _ in }, resumeHold: { _ in }, restore: restore
             ),
-            strikeColor: .inkFaded
+            strikeColor: .inkFaded,
+            showMenu: { openMenu(task) },
+            // Held, it is not dragged back to the page meanwhile.
+            menu: menuTaskID == task.id ? [] : nil
         )
+        // Behind a menu, every line but the one held recedes, as on the page.
+        .receded(menuTaskID != nil && menuTaskID != task.id)
         .fadesUnderListNames()
+        .onLongPressGesture(minimumDuration: Lift.holdDuration) { if menuTaskID == nil { openMenu(task) } }
+        .onSecondaryClick { if menuTaskID == nil { openMenu(task) } }
         .transition(.opacity)
     }
 
@@ -80,6 +98,7 @@ struct ArchiveLines: View {
         .buttonStyle(.plain)
         .accessibilityValue(isOpen ? "Open" : "Folded")
         .accessibilityAddTraits(.isHeader)
+        .receded(menuTaskID != nil)
         .fadesUnderListNames()
     }
 

@@ -37,6 +37,9 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
     /// A turn has landed: the page turned to lies exactly where the real one
     /// is about to be, and covers it until it has been laid out.
     var stripCovers = false
+    /// Where this page is told to keep note of how far it has turned, frame by
+    /// frame, so that a finger can catch the row of pages while it is moving.
+    var flight: TurnFlight?
     /// A sideways drag turns the page wherever it starts. Off, only one that
     /// starts at the bottom of the page does.
     var turnsAnywhere = false
@@ -44,6 +47,13 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
     var onTurnChanged: ((CGFloat) -> Void)?
     /// The drag was let go: how far it went, and its speed in page widths per second.
     var onTurnEnded: ((CGFloat, CGFloat) -> Void)?
+    /// A new task is being written at the end of the page: the page keeps
+    /// that line just above the list names' place, where it is best seen
+    /// (Wayne, Nov 19, 2026).
+    var followsEnd = false
+    /// Changes whenever the end of the page moves while it is followed: a
+    /// task was added, or the line being written grew or shrank.
+    var endKey = 0
     /// The page was dragged up past its end.
     var onPullPastEnd: (() -> Void)?
     /// The archive was dragged down past its top.
@@ -69,6 +79,8 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
     /// Where the paper is held while the scrolling lets go of it for a moment
     /// under the finger. Nothing, almost always. See `PullTracker.held`.
     @State private var held: CGFloat = 0
+    /// Counts the times the page was asked to follow its end, so that only the last is carried out.
+    @State private var followings = 0
 
     var body: some View {
         GeometryReader { proxy in
@@ -94,6 +106,7 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
                         // The page is always here. Settings stand above it, in the same
                         // sheet, and take room as they come: nothing is put in or taken
                         // out, so going back and forth only ever moves what is there.
+                        ScrollViewReader { scroll in
                         sheet(
                             VStack(alignment: .leading, spacing: 0) {
                                 header
@@ -125,6 +138,24 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
                             .opacity(archiveShown ? 0 : 1)
                             .allowsHitTesting(!archiveShown)
                             .accessibilityHidden(archiveShown)
+                            // The line being written is brought to the best place: when
+                            // the pen is put to it, when the keyboard has changed how much
+                            // of the page shows, and each time the end of the page moves.
+                            .onChange(of: EndInView(follows: followsEnd, key: endKey, height: height)) { old, new in
+                                guard new.follows, !showsHeader, !archiveShown else { return }
+                                // Several of these come at once: a task is added, the
+                                // keyboard's bar of suggestions comes and goes with every
+                                // line. The page is moved once, when they have passed, so
+                                // that the keys being typed meanwhile are not kept waiting.
+                                followings += 1
+                                let mine = followings
+                                Task { @MainActor in
+                                    try? await Task.sleep(for: .milliseconds(60))
+                                    guard mine == followings, followsEnd else { return }
+                                    withAnimation(reduceMotion ? nil : .quick) { scroll.scrollTo(Self.endID, anchor: .bottom) }
+                                }
+                            }
+                        }
 
                         // The archive is laid out a moment before it is wanted and kept
                         // until it has gone, so it too only ever moves.
@@ -140,16 +171,14 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
                     }
                     .animation(.sheet, value: archiveShown)
                     // The page follows the finger and pales as it leaves.
-                    .offset(x: turn * width)
-                    .opacity(stripCovers ? 0 : 1 - 0.65 * min(abs(turn), 1))
+                    .modifier(TurnedPage(x: turn, width: width, isCovered: stripCovers, flight: flight))
                     // Each other page darkens to full ink as it comes to the middle.
                     ForEach(strip) { page in
                         sheet(page.view, metrics: metrics, footerZone: footerZone, minHeight: minHeight)
                             .scrollDisabled(true)
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
-                            .offset(x: page.x * width)
-                            .opacity(1 - 0.65 * min(abs(page.x), 1))
+                            .modifier(TurnedPage(x: page.x, width: width))
                     }
                 }
                 // The page runs to the bottom edge, underneath the list names.
@@ -223,6 +252,8 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
         #endif
     }
 
+    private static var endID: String { "end of the page" }
+
     /// Paper above the list names that still counts as the bottom of the page.
     private static var turnZoneSlack: CGFloat { 28 }
 
@@ -251,6 +282,7 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
         _ view: some View, metrics: PageMetrics, footerZone: CGFloat, minHeight: CGFloat, handsOver: Bool = false
     ) -> some View {
         ScrollView {
+            VStack(spacing: 0) {
             column(view, metrics: metrics)
                 .padding(.top, metrics.topInset)
                 // The last line can always be scrolled clear of the list names.
@@ -263,6 +295,9 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
                 // which changes what the scrolling reports, which moved it again,
                 // without end.
                 .offset(y: handsOver ? held : 0)
+            // The very end of the paper, below the room left for the list names.
+            Color.clear.frame(height: 0).id(Self.endID)
+            }
         }
         .scrollIndicators(.hidden)
         // The pull past the end is how the archive opens, so even a short page gives.
@@ -276,6 +311,50 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
             .padding(.horizontal, metrics.sideMargin)
             .frame(maxWidth: .infinity)
     }
+}
+
+/// How far the open page has turned at this moment, in pages: the only place
+/// the row's position can be read while it is moving by itself.
+@MainActor final class TurnFlight {
+    var x: CGFloat = 0
+}
+
+/// A page in the row, `x` pages from the middle of the paper: moved aside by
+/// that much and paler the further it is, up to one page away. Worked out
+/// afresh for every frame of a turn. Left to SwiftUI, only the two ends of
+/// the turn were worked out and the ink faded evenly between them, so in a
+/// turn across two lists the page in between went by pale from edge to edge
+/// and the page left behind took the whole way to fade.
+private struct TurnedPage: ViewModifier, Animatable {
+    var x: CGFloat
+    var width: CGFloat
+    /// The page that slid in lies over this one for a moment.
+    var isCovered = false
+    var flight: TurnFlight?
+
+    nonisolated var animatableData: CGFloat {
+        get { x }
+        set { x = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        flight?.x = x
+        return content
+            .offset(x: x * width)
+            .opacity(isCovered ? 0 : Self.ink(at: x))
+    }
+
+    /// Full ink in the middle of the paper, 35 percent a page away or more.
+    nonisolated static func ink(at x: CGFloat) -> Double {
+        1 - 0.65 * min(abs(x), 1)
+    }
+}
+
+/// What decides where a page that follows its end should stand.
+private struct EndInView: Equatable {
+    var follows: Bool
+    var key: Int
+    var height: CGFloat
 }
 
 /// The coordinate space of the whole page, inside the safe area.

@@ -35,13 +35,15 @@ extension ModelContext {
 
     /// Takes strikes made in a widget or the Live Activity into the store.
     /// The last word on a task wins: struck then undone leaves it live.
-    func apply(_ changes: [PendingChange]) throws {
+    /// `person` is who the user is on shared lists: a strike made outside the
+    /// app carries their name as one made in it does.
+    func apply(_ changes: [PendingChange], by person: String? = nil) throws {
         guard !changes.isEmpty else { return }
         let tasks = try fetch(FetchDescriptor<TaskItem>())
         for change in changes {
             guard let task = tasks.first(where: { $0.id == change.task }) else { continue }
             if change.struck {
-                strike(task, at: change.date)
+                strike(task, by: task.list?.isShared == true ? person : nil, at: change.date)
             } else if !task.isLive {
                 restore(task)
             }
@@ -91,7 +93,7 @@ final class PageMirror {
 
     func refresh() {
         guard let context else { return }
-        try? context.apply(page.takePending())
+        try? context.apply(page.takePending(), by: CloudSync.shared.myName)
         guard let snapshot = try? context.pageSnapshot(current: current) else { return }
         if snapshot != page.snapshot {
             page.snapshot = snapshot

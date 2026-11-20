@@ -25,6 +25,10 @@ final class TaskList {
     var shareURL: String?
     /// What iCloud last said about the list's record. See `RecordCoder`.
     var recordData: Data?
+    /// One of life, work and home as the app made them on a first launch,
+    /// not yet sent to iCloud. Kept on this device only. Until iCloud has been
+    /// heard from, such a list waits: iCloud may already have the user's lists.
+    var isSeeded: Bool = false
 
     /// Live and struck tasks together. Deleting a list removes its tasks and archive.
     @Relationship(deleteRule: .cascade, inverse: \TaskItem.list)

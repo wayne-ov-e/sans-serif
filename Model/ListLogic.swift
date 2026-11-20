@@ -47,7 +47,9 @@ extension TaskList {
     /// first, under its own heading, above the months.
     func doneToday(at now: Date = .now, calendar: Calendar = .current) -> [TaskItem] {
         (tasks ?? [])
-            .filter { task in task.struckDate.map { calendar.isDate($0, inSameDayAs: now) } ?? false }
+            // From the start of today on. A task struck by a device whose clock
+            // runs ahead counts as today's: it has to stand under some heading.
+            .filter { task in task.struckDate.map { $0 >= calendar.startOfDay(for: now) } ?? false }
             .sorted { ($0.struckDate ?? .distantPast) > ($1.struckDate ?? .distantPast) }
     }
 
@@ -75,6 +77,18 @@ extension TaskList {
 }
 
 /// One month of the archive.
+extension TaskList {
+    /// The struck tasks that stand under the same heading of the archive as
+    /// this one: what was done today, or the rest of its month. They can be
+    /// deleted together. Empty for a task that is not struck, or not of this list.
+    func doneGroup(with task: TaskItem, now: Date = .now) -> [TaskItem] {
+        guard !task.isLive, task.list === self else { return [] }
+        let today = doneToday(at: now)
+        if today.contains(where: { $0.id == task.id }) { return today }
+        return archive(before: now).first { $0.tasks.contains { $0.id == task.id } }?.tasks ?? []
+    }
+}
+
 struct ArchiveMonth: Identifiable {
     /// The first moment of the month.
     let month: Date
@@ -216,11 +230,20 @@ extension ModelContext {
         var removed = 0
         let all = try lists()
         for name in PageStore.defaultListNames {
-            let copies = all.filter { $0.name == name }.sorted {
+            // Only the user's own lists that are not shared with anyone. A list
+            // someone else shared is theirs, whatever it is called, and a list
+            // the user shares has people on it: neither is folded into another.
+            let own = all.filter { $0.name == name && $0.zoneOwner == nil && !$0.isShared }
+            // What this device made on its first launch and never sent, and
+            // what iCloud already had. Nothing else is folded: a second list
+            // the user names life, work or home themselves is theirs to keep
+            // (it used to be folded into the first and deleted).
+            let seeds = own.filter { $0.isSeeded && $0.recordData == nil }
+            let known = own.filter { $0.recordData != nil }.sorted {
                 ($0.createdDate, $0.id.uuidString) < ($1.createdDate, $1.id.uuidString)
             }
-            guard let keeper = copies.first, copies.count > 1 else { continue }
-            for copy in copies.dropFirst() {
+            guard let keeper = known.first, !seeds.isEmpty else { continue }
+            for copy in seeds {
                 // Below what the keeper already has, in their own order.
                 var order = nextOrder(in: keeper)
                 for task in (copy.tasks ?? []).sorted(by: TaskItem.inPageOrder) {
@@ -263,7 +286,7 @@ enum PageStore {
     static func seedDefaultListsIfNeeded(in context: ModelContext) throws {
         guard try context.fetchCount(FetchDescriptor<TaskList>()) == 0 else { return }
         for name in defaultListNames {
-            try context.addList(named: name)
+            try context.addList(named: name)?.isSeeded = true
         }
         try context.save()
     }

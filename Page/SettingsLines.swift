@@ -90,7 +90,7 @@ private struct SettingLine: View {
             // A tap turns the line off or on. The pen draws or lifts the line by itself.
             .onTapGesture { set(!isOn) }
             .onHorizontalDrag(onChanged: dragChanged, onEnded: dragEnded)
-            .animation(.easeOut(duration: 0.25), value: isOn)
+            .animation(.ink, value: isOn)
             .onAppear { progress = isOn ? 0 : 1 }
             // Changed somewhere else, by VoiceOver or another window.
             .onChange(of: isOn) { _, new in if drag == nil { draw(to: new ? 0 : 1) } }

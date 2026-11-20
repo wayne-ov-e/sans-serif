@@ -27,4 +27,15 @@ final class SceneDelegate: NSObject, UIWindowSceneDelegate {
         Task { await CloudSync.shared.accept(metadata) }
     }
 }
+#elseif os(macOS)
+import AppKit
+import CloudKit
+
+/// On the Mac an invitation to a list comes to the app's own delegate.
+/// Without one, a link opened there joined nothing.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func application(_ application: NSApplication, userDidAcceptCloudKitShareWith metadata: CKShare.Metadata) {
+        Task { await CloudSync.shared.accept(metadata) }
+    }
+}
 #endif

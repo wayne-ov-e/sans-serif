@@ -19,15 +19,21 @@ struct StrikeTaskIntent: AppIntent {
     @Parameter(title: "Task")
     var task: String
 
+    /// How the line looked when it was tapped. Empty for a tap from a widget
+    /// drawn by an earlier version of the app.
+    @Parameter(title: "Was live")
+    var wasLive: Bool?
+
     init() {}
 
-    init(task: UUID) {
+    init(task: UUID, wasLive: Bool? = nil) {
         self.task = task.uuidString
+        self.wasLive = wasLive
     }
 
     func perform() async throws -> some IntentResult {
         if let id = UUID(uuidString: task) {
-            SharedPage.shared.toggle(task: id)
+            SharedPage.shared.toggle(task: id, expectingLive: wasLive)
         }
         // If this does run in the app, the change goes into the store now.
         await OutsideChanges.handler?()
@@ -51,15 +57,21 @@ struct StrikeLiveTaskIntent: AppIntent {
     @Parameter(title: "Task")
     var task: String
 
+    /// How the line looked when it was tapped. Empty for a tap from a widget
+    /// drawn by an earlier version of the app.
+    @Parameter(title: "Was live")
+    var wasLive: Bool?
+
     init() {}
 
-    init(task: UUID) {
+    init(task: UUID, wasLive: Bool? = nil) {
         self.task = task.uuidString
+        self.wasLive = wasLive
     }
 
     func perform() async throws -> some IntentResult {
         if let id = UUID(uuidString: task) {
-            SharedPage.shared.toggle(task: id)
+            SharedPage.shared.toggle(task: id, expectingLive: wasLive)
         }
         await OutsideChanges.handler?()
         WidgetCenter.shared.reloadAllTimelines()

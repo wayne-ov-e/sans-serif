@@ -369,6 +369,39 @@ final class EdgeWalkTests: XCTestCase {
         return XCTWaiter().wait(for: [expectation], timeout: 4) == .completed
     }
 
+    /// While tasks are written one after another, the line being written
+    /// stays just above the keyboard and "done", however long the page grows.
+    func testThePageFollowsTheLineBeingWritten() {
+        skipTheFirstPage()
+        point(0.5, 0.5).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "the keyboard should be up")
+        Thread.sleep(forTimeInterval: 0.6)
+        for number in 1...18 {
+            app.typeText("Task number \(number)\n")
+            Thread.sleep(forTimeInterval: 0.7)
+            guard number >= 6 else { continue }
+            assertTheNewLineIsWellPlaced("after task \(number)")
+        }
+        // A line that grows as it is written, past the width of the page.
+        app.typeText("A long line that goes on past the edge of the paper and on to the next row and further")
+        Thread.sleep(forTimeInterval: 0.7)
+        assertTheNewLineIsWellPlaced("while a long line is written")
+        // Every line arrived whole: no letter typed while the page moved was lost.
+        let missing = (1...18).filter { !line("Task number \($0)").exists }
+        XCTAssertEqual(missing, [], "tasks whose words did not arrive whole")
+    }
+
+    private func assertTheNewLineIsWellPlaced(_ when: String, file: StaticString = #filePath, line number: UInt = #line) {
+        let keyboardTop = app.keyboards.firstMatch.frame.minY
+        let field = line("New task").frame
+        XCTAssertLessThanOrEqual(field.maxY, keyboardTop + 1, "\(when): the line is above the keyboard", file: file, line: number)
+        XCTAssertGreaterThan(field.maxY, keyboardTop - 150, "\(when): and not far above it", file: file, line: number)
+        let done = app.buttons.matching(identifier: "done").allElementsBoundByIndex.map(\.frame).min { $0.minY < $1.minY }
+        if let done {
+            XCTAssertLessThanOrEqual(field.maxY, done.minY + 8, "\(when): the line is clear of \"done\"", file: file, line: number)
+        }
+    }
+
     private func first(_ label: String) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label)).firstMatch
     }

@@ -94,18 +94,177 @@ final class CloudSync {
         theirs = CKSyncEngine(CKSyncEngine.Configuration(
             database: container.sharedCloudDatabase, stateSerialization: Self.state(.shared), delegate: delegate
         ))
-        for list in lists() {
+        // Said once the first fetch has come back. Only lists the app made on a
+        // first launch are held meanwhile, and only new installs have those.
+        heardFromICloud = UserDefaults.standard.bool(forKey: Self.heardKey)
+        for list in lists() where !isHeld(list) {
             zoneOfList[list.id] = list.zoneID
             for task in list.tasks ?? [] { zoneOfTask[task.id] = list.zoneID }
         }
         // Whatever iCloud has never heard of goes out now: the first time, that is everything.
         for list in lists() where list.recordData == nil { queue(list, withTasks: true) }
         for task in tasks() where task.recordData == nil { queue(task) }
+        // And what was changed or deleted while the iCloud sync line was struck.
+        sendWhatWaited()
+        if let observer { NotificationCenter.default.removeObserver(observer) }
         observer = NotificationCenter.default.addObserver(
             forName: ModelContext.willSave, object: context, queue: .main
         ) { _ in
             MainActor.assumeIsolated { CloudSync.shared.storeWillSave() }
         }
+    }
+
+    // MARK: While sync is off
+
+    private static let heardKey = "cloudSync.heard"
+    private static let waitingChangedKey = "cloudSync.waiting.changed"
+    private static let waitingZonesKey = "cloudSync.waiting.deletedZones"
+    private static let waitingRecordsKey = "cloudSync.waiting.deletedRecords"
+
+    /// The first fetch from iCloud has come back at least once. Until then the
+    /// lists the app made on its first launch are held: see `settleSeeds`.
+    var heardFromICloud = true
+
+    /// The app is running with the iCloud sync line struck. Nothing is sent,
+    /// but what is changed and deleted is noted, so that it can be sent when
+    /// sync is back on. Before, such changes were never sent at all: the other
+    /// devices kept the old words, the unstruck tasks and the deleted lists.
+    func noteChangesWithoutSync(context: ModelContext) {
+        guard mine == nil, observer == nil else { return }
+        self.context = context
+        rememberPlaces()
+        observer = NotificationCenter.default.addObserver(
+            forName: ModelContext.willSave, object: context, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { CloudSync.shared.storeWillSaveWithoutSync() }
+        }
+    }
+
+    /// Where every list and task is kept in iCloud, as of now.
+    func rememberPlaces() {
+        for list in lists() {
+            zoneOfList[list.id] = list.zoneID
+            for task in list.tasks ?? [] { zoneOfTask[task.id] = list.zoneID }
+        }
+    }
+
+    /// What `storeWillSave` would have handed the engine, written down instead.
+    func storeWillSaveWithoutSync(defaults: UserDefaults = .standard) {
+        guard mine == nil, !isApplying, let context else { return }
+        var changed = Set(defaults.stringArray(forKey: Self.waitingChangedKey) ?? [])
+        var zones = Set(defaults.stringArray(forKey: Self.waitingZonesKey) ?? [])
+        var records = Set(defaults.stringArray(forKey: Self.waitingRecordsKey) ?? [])
+        for model in context.deletedModelsArray {
+            if let list = model as? TaskList {
+                guard let zone = zoneOfList.removeValue(forKey: list.id) else { continue }
+                // Only what iCloud has: a list it never heard of leaves nothing to delete.
+                if list.recordData != nil { zones.insert(Self.written(zone)) }
+                changed.remove(list.id.uuidString)
+                for task in list.tasks ?? [] {
+                    zoneOfTask[task.id] = nil
+                    changed.remove(task.id.uuidString)
+                }
+            } else if let task = model as? TaskItem {
+                changed.remove(task.id.uuidString)
+                guard let zone = zoneOfTask.removeValue(forKey: task.id), zoneOfList.values.contains(zone) else { continue }
+                if task.recordData != nil { records.insert(Self.written(task.id, in: zone)) }
+            }
+        }
+        for model in context.insertedModelsArray + context.changedModelsArray {
+            if let list = model as? TaskList {
+                zoneOfList[list.id] = list.zoneID
+                changed.insert(list.id.uuidString)
+            } else if let task = model as? TaskItem, let zone = task.list?.zoneID {
+                if let old = zoneOfTask[task.id], old != zone, task.recordData != nil {
+                    // Moved to another list: its record in the old one is to go.
+                    records.insert(Self.written(task.id, in: old))
+                    task.recordData = nil
+                }
+                zoneOfTask[task.id] = zone
+                changed.insert(task.id.uuidString)
+            }
+        }
+        defaults.set(Array(changed), forKey: Self.waitingChangedKey)
+        defaults.set(Array(zones), forKey: Self.waitingZonesKey)
+        defaults.set(Array(records), forKey: Self.waitingRecordsKey)
+    }
+
+    /// What was noted while sync was off: the changes to send and the
+    /// deletions to ask for, and forgets them.
+    func takeWhatWaited(defaults: UserDefaults = .standard) -> (changed: [UUID], zones: [CKRecordZone.ID], records: [CKRecord.ID]) {
+        let changed = (defaults.stringArray(forKey: Self.waitingChangedKey) ?? []).compactMap(UUID.init(uuidString:))
+        let zones = (defaults.stringArray(forKey: Self.waitingZonesKey) ?? []).compactMap(Self.zone(written:))
+        let records = (defaults.stringArray(forKey: Self.waitingRecordsKey) ?? []).compactMap(Self.record(written:))
+        for key in [Self.waitingChangedKey, Self.waitingZonesKey, Self.waitingRecordsKey] { defaults.removeObject(forKey: key) }
+        return (changed, zones, records)
+    }
+
+    private func sendWhatWaited() {
+        let waited = takeWhatWaited()
+        for zone in waited.zones { engine(for: zone)?.state.add(pendingDatabaseChanges: [.deleteZone(zone)]) }
+        for record in waited.records { engine(for: record.zoneID)?.state.add(pendingRecordZoneChanges: [.deleteRecord(record)]) }
+        // Only what was changed here: sending everything would write this
+        // device's old copy over what other people changed meanwhile.
+        for id in waited.changed {
+            if let list = list(id) { queue(list, withTasks: false) } else if let task = task(id) { queue(task) }
+        }
+    }
+
+    nonisolated static func written(_ zone: CKRecordZone.ID) -> String { "\(zone.zoneName)|\(zone.ownerName)" }
+
+    nonisolated static func written(_ task: UUID, in zone: CKRecordZone.ID) -> String { "\(task.uuidString)|\(written(zone))" }
+
+    nonisolated static func zone(written: String) -> CKRecordZone.ID? {
+        let parts = written.split(separator: "|", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return nil }
+        return CKRecordZone.ID(zoneName: parts[0], ownerName: parts[1])
+    }
+
+    nonisolated static func record(written: String) -> CKRecord.ID? {
+        let parts = written.split(separator: "|", maxSplits: 1).map(String.init)
+        guard parts.count == 2, UUID(uuidString: parts[0]) != nil, let zone = zone(written: parts[1]) else { return nil }
+        return CKRecord.ID(recordName: parts[0], zoneID: zone)
+    }
+
+    // MARK: The first lists
+
+    /// A list the app made on a first launch that waits for iCloud to be
+    /// heard from before it is sent anywhere.
+    func isHeld(_ list: TaskList) -> Bool {
+        !heardFromICloud && list.isSeeded && list.recordData == nil
+    }
+
+    /// iCloud has been heard from for the first time on this device. The
+    /// lists made on its first launch are settled: folded into the lists of
+    /// the same name iCloud already had; removed if they are still as the app
+    /// made them and iCloud has the user's lists (so that life, work and home
+    /// renamed or deleted on another device do not come back with every new
+    /// install); and otherwise sent like any other list.
+    ///
+    /// - Returns: the lists that are now to be sent.
+    @discardableResult
+    func settleSeeds() -> [TaskList] {
+        heardFromICloud = true
+        guard let context else { return [] }
+        _ = try? context.mergeDuplicateDefaultLists()
+        let all = lists()
+        let iCloudHasLists = all.contains { $0.recordData != nil && !$0.isSomeoneElses }
+        var kept: [TaskList] = []
+        var count = all.count
+        for seed in all where seed.isSeeded && seed.recordData == nil {
+            let untouched = (seed.tasks ?? []).isEmpty && PageStore.defaultListNames.contains(seed.name)
+            // The last list is never removed: there would be no page left.
+            if iCloudHasLists, untouched, count > 1 {
+                context.delete(seed)
+                count -= 1
+            } else {
+                seed.isSeeded = false
+                kept.append(seed)
+            }
+        }
+        for list in kept { queue(list, withTasks: true) }
+        try? context.save()
+        return kept
     }
 
     /// Queues again whatever iCloud has still never taken: a save it refused
@@ -256,6 +415,7 @@ final class CloudSync {
     }
 
     private func queue(_ list: TaskList, withTasks: Bool) {
+        guard !isHeld(list) else { return }
         let zone = list.zoneID
         if zoneOfList[list.id] == nil || list.recordData == nil, !list.isSomeoneElses {
             mine?.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zone))])
@@ -266,7 +426,7 @@ final class CloudSync {
     }
 
     private func queue(_ task: TaskItem) {
-        guard let list = task.list else { return }
+        guard let list = task.list, !isHeld(list) else { return }
         let zone = list.zoneID
         if let old = zoneOfTask[task.id], old != zone {
             // Moved to another list: it leaves the old zone and is written afresh in the new one.
@@ -321,7 +481,11 @@ final class CloudSync {
                 let records = changes.modifications.map(\.record)
                 for record in records where record.recordType == RecordCoder.listType { take(list: record) }
                 for record in records where record.recordType == RecordCoder.taskType { take(task: record) }
-                for deletion in changes.deletions { remove(deletion.recordID, type: deletion.recordType) }
+                for record in records { if let share = record as? CKShare { take(share: share) } }
+                for deletion in changes.deletions {
+                    remove(deletion.recordID, type: deletion.recordType)
+                    if deletion.recordType == CKRecord.SystemType.share { shareGone(in: deletion.recordID.zoneID) }
+                }
               }
             }
             // Two devices each made life, work and home before they met. Folding
@@ -333,13 +497,24 @@ final class CloudSync {
                 for record in sent.savedRecords { rememberSystemFields(of: record) }
                 for failure in sent.failedRecordSaves { resolve(failure, in: engine) }
             }
+            // A deletion that went down with a batch iCloud refused is asked
+            // for again. The task is already gone from this store, so nothing
+            // else would ever ask: it would stay in iCloud and on everyone
+            // else's page, and come back here the next time it was changed.
+            for (id, error) in sent.failedRecordDeletes where Self.deletesAgain(after: error.code) {
+                engine.state.add(pendingRecordZoneChanges: [.deleteRecord(id)])
+            }
+        case .didFetchChanges:
+            // The first word from iCloud on this device: the first lists are settled.
+            if engine === mine, !heardFromICloud {
+                UserDefaults.standard.set(true, forKey: Self.heardKey)
+                settleSeeds()
+                sendSoon()
+            }
         case .accountChange(let change):
             if case .signIn = change.changeType { return }
             // Signed out, or another account: what iCloud knew of these lists no longer holds.
-            applying {
-                for list in lists() { list.recordData = nil }
-                for task in tasks() { task.recordData = nil }
-            }
+            applying { forgetAccount() }
         default:
             break
         }
@@ -359,6 +534,67 @@ final class CloudSync {
         try? context?.save()
         undo?.enableUndoRegistration()
         isApplying = false
+    }
+
+    /// A save found no zone to go in. If iCloud once had the list, or says
+    /// the user deleted the zone, the list was deleted somewhere else.
+    nonisolated static func wasDeletedElsewhere(code: CKError.Code, iCloudHadList: Bool) -> Bool {
+        code == .userDeletedZone || iCloudHadList
+    }
+
+    /// A deletion iCloud did not carry out is sent again after these. After
+    /// "no such record" or "no such zone" there is nothing left to delete.
+    nonisolated static func deletesAgain(after code: CKError.Code) -> Bool {
+        switch code {
+        case .batchRequestFailed, .operationCancelled, .serverRecordChanged: true
+        default: false
+        }
+    }
+
+    /// One of the user's own lists is shared: said by the share itself, which
+    /// reaches every device of theirs. The list record does not say it, so
+    /// without this a list shared from the phone was not known to be shared
+    /// on the iPad: no names by its tasks there, and iCloud asked rarely.
+    func take(share: CKShare) {
+        let zone = share.recordID.zoneID
+        guard zone.ownerName == CKCurrentUserDefaultName,
+              let id = RecordCoder.listID(fromZone: zone.zoneName), let list = list(id)
+        else { return }
+        if !list.isShared { list.isShared = true }
+        let link = share.url?.absoluteString
+        if list.shareURL != link { list.shareURL = link }
+    }
+
+    /// The share of one of the user's own lists was taken down, on another device.
+    func shareGone(in zone: CKRecordZone.ID) {
+        guard zone.ownerName == CKCurrentUserDefaultName,
+              let id = RecordCoder.listID(fromZone: zone.zoneName), let list = list(id)
+        else { return }
+        sharingStopped(for: list)
+    }
+
+    /// The iCloud account is gone or has changed. Nothing iCloud said of
+    /// these lists holds any longer: lists other people shared were shared
+    /// with the old account and leave with it, the user's own are no longer
+    /// shared with anyone, and iCloud's name for the user is asked for again.
+    func forgetAccount() {
+        for list in lists() {
+            if list.isSomeoneElses {
+                removeList(in: list.zoneID)
+            } else {
+                list.recordData = nil
+                if list.isShared { list.isShared = false }
+                if list.shareURL != nil { list.shareURL = nil }
+            }
+        }
+        for task in tasks() { task.recordData = nil }
+        zoneOfList = [:]
+        zoneOfTask = [:]
+        for list in lists() {
+            zoneOfList[list.id] = list.zoneID
+            for task in list.tasks ?? [] { zoneOfTask[task.id] = list.zoneID }
+        }
+        if !nameIsTyped { myName = nil }
     }
 
     func take(list record: CKRecord) {
@@ -472,10 +708,18 @@ final class CloudSync {
             rememberSystemFields(of: server)
             engine.state.add(pendingRecordZoneChanges: [.saveRecord(id)])
         case .zoneNotFound, .userDeletedZone:
-            // The zone has to exist before anything can be written in it.
-            if id.zoneID.ownerName == CKCurrentUserDefaultName {
+            guard id.zoneID.ownerName == CKCurrentUserDefaultName else { break }
+            let held = RecordCoder.listID(fromZone: id.zoneID.zoneName).flatMap { list($0) }
+            if Self.wasDeletedElsewhere(code: failure.error.code, iCloudHadList: held?.recordData != nil) {
+                // iCloud had this list and its zone is gone: it was deleted on
+                // another device. It goes here too. Making the zone again for
+                // this one record brought half the list back, without its name.
+                removeList(in: id.zoneID)
+            } else {
+                // Never sent yet: the zone has to exist before anything can be
+                // written in it, and the whole list goes with it.
                 engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: id.zoneID))])
-                engine.state.add(pendingRecordZoneChanges: [.saveRecord(id)])
+                if let held { queue(held, withTasks: true) } else { engine.state.add(pendingRecordZoneChanges: [.saveRecord(id)]) }
             }
         case .unknownItem:
             // iCloud no longer has the record this was a change to. It is written afresh.
@@ -554,8 +798,9 @@ final class CloudSync {
         }
         // The link is the invitation. A share made by an earlier build let
         // nobody in by the link alone, and is opened up here.
-        if share.publicPermission != .readWrite || share.url == nil {
-            share[CKShare.SystemFieldKey.title] = list.name
+        // And it goes out dressed: the list's name, and the card drawn for it.
+        let dressed = dress(share, for: list)
+        if share.publicPermission != .readWrite || share.url == nil || dressed {
             share.publicPermission = .readWrite
             guard let saved = try await database.save(share) as? CKShare else { throw CKError(.internalError) }
             share = saved
@@ -572,8 +817,17 @@ final class CloudSync {
         if list.isSomeoneElses { return try await joinedShare(for: list) }
         let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: list.zoneID)
         do {
-            let share = try await container.privateCloudDatabase.record(for: shareID) as? CKShare
-            if let share { noteName(from: share) }
+            var share = try await container.privateCloudDatabase.record(for: shareID) as? CKShare
+            if let found = share {
+                noteName(from: found)
+                // A list renamed since it was shared, or shared by an earlier
+                // build without its card: the link is brought up to date. If
+                // that cannot be saved just now, the share is still the share.
+                if dress(found, for: list),
+                   let saved = try? await container.privateCloudDatabase.save(found) as? CKShare {
+                    share = saved
+                }
+            }
             return share
         } catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound {
             return nil
@@ -588,6 +842,22 @@ final class CloudSync {
         else { return share }
         share.removeParticipant(participant)
         return try await container.privateCloudDatabase.save(share) as? CKShare
+    }
+
+    /// Gives a share what is shown with its link, in Messages and wherever
+    /// else it is sent, and to the person invited before they join: the
+    /// list's name and the card drawn for it. Only the name: nothing written
+    /// on the list is shown to someone who has not joined.
+    ///
+    /// - Returns: whether anything was changed, and so is to be saved.
+    @discardableResult
+    func dress(_ share: CKShare, for list: TaskList) -> Bool {
+        let title = share[CKShare.SystemFieldKey.title] as? String
+        let hasCard = share[CKShare.SystemFieldKey.thumbnailImageData] as? Data != nil
+        guard title != list.name || !hasCard else { return false }
+        share[CKShare.SystemFieldKey.title] = list.name
+        share[CKShare.SystemFieldKey.thumbnailImageData] = ShareCard.png(named: list.name)
+        return true
     }
 
     /// The list is the user's alone again: the share is taken down, and the link stops working.
@@ -616,13 +886,27 @@ final class CloudSync {
 
     /// An invitation was opened: the list is joined and fetched.
     func accept(_ metadata: CKShare.Metadata) async {
+        // With the iCloud sync line struck there is nothing to fetch the list
+        // with: it would be joined in iCloud and never appear. The page says so.
+        guard isRunning else {
+            Self.say("Turn on iCloud sync to join a shared list.")
+            return
+        }
         do {
             let share = try await container.accept(metadata)
             noteName(from: share)
             await turn.run { try? await self.theirs?.fetchChanges() }
         } catch {
             // The invitation was withdrawn, or there is no network. Nothing is joined.
+            Self.say("Could not join the list just now.")
         }
+    }
+
+    /// Something for the page to say where the list names are, for a moment.
+    static let said = Notification.Name("app.sans-serif.said")
+
+    static func say(_ words: String) {
+        NotificationCenter.default.post(name: said, object: words)
     }
 
     /// The list is no longer shared with anyone: sharing was stopped from the share sheet.

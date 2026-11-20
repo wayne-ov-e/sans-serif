@@ -72,6 +72,7 @@ struct ShareLines: View {
         .task(id: list.id) { await ask() }
         // The user's own line reads as they have just named themselves.
         .onChange(of: names) { _, _ in
+            noteICloudName()
             guard case .known(let link, var people) = load, let me = people.firstIndex(where: \.isMe),
                   let name = CloudSync.shared.myName, !name.isEmpty
             else { return }
@@ -118,7 +119,11 @@ struct ShareLines: View {
         }
         if !list.isSomeoneElses {
             if people.count < 2 { note("Anyone with the link can join and write.") }
-            ShareLink(item: link, subject: Text(list.name), message: Text("Join my list, \(list.name)")) {
+            ShareLink(
+                item: link, subject: Text(list.name), message: Text("Join my list, \(list.name)"),
+                // The share sheet shows the list's card and name, not a bare link.
+                preview: SharePreview(list.name, image: ShareCard.image(named: list.name))
+            ) {
                 line("Send link")
             }
             .buttonStyle(.plain)
@@ -197,11 +202,11 @@ struct ShareLines: View {
         // Not shared, as far as this device knows: nothing to ask iCloud yet,
         // but what it calls the user.
         guard list.isShared || list.isSomeoneElses else {
-            iCloudName = CloudSync.shared.nameIsTyped ? "" : CloudSync.shared.myName ?? ""
+            noteICloudName()
             load = .known(link: nil, people: [])
             if iCloudName.isEmpty {
                 await CloudSync.shared.learnName()
-                iCloudName = CloudSync.shared.nameIsTyped ? "" : CloudSync.shared.myName ?? ""
+                noteICloudName()
             }
             return
         }
@@ -250,10 +255,19 @@ struct ShareLines: View {
             try await CloudSync.shared.stopSharing(list)
             isConfirmingStop = false
             changes += 1
+            noteICloudName()
             load = .known(link: nil, people: [])
         } catch {
             load = .failed(Self.words(for: error))
         }
+    }
+
+    /// What the user's own line reads until they write a name: iCloud's.
+    private func noteICloudName() {
+        #if DEBUG
+        if Self.isPreview { return }
+        #endif
+        iCloudName = CloudSync.shared.nameIsTyped ? "" : CloudSync.shared.myName ?? ""
     }
 
     /// Asks iCloud for the share, in one way or another, and shows what comes back.
@@ -269,6 +283,7 @@ struct ShareLines: View {
         } catch {
             load = .failed(Self.words(for: error))
         }
+        noteICloudName()
     }
 
     /// With iCloud's own number for what went wrong, so it can be told apart.
@@ -384,11 +399,20 @@ private struct OwnLine: View {
         isTyping = false
         isFocused = false
         HourEntry.shared.isWritingElsewhere = false
-        // Left as iCloud has it, nothing was written: iCloud's name goes on being used.
+        // Left as it stood, nothing was written, and nothing changes: not the
+        // name the user typed before, and not iCloud's name for them.
         let written = CloudSync.tidied(draft)
-        CloudSync.shared.setName(written == fallback ? "" : written)
+        guard written != name else { return }
+        CloudSync.shared.setName(written)
         typed = CloudSync.shared.nameIsTyped ? CloudSync.shared.myName ?? "" : ""
         nameChanged()
+        // Emptied: iCloud's name is asked for again and used.
+        if written.isEmpty {
+            Task { @MainActor in
+                await CloudSync.shared.learnName()
+                nameChanged()
+            }
+        }
     }
 }
 

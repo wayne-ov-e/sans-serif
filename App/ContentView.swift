@@ -22,6 +22,9 @@ struct ContentView: View {
     @AppStorage(WorkHours.endKey) private var workEnd = WorkHours.standard.end
     @AppStorage(WorkHours.listKey) private var workList = ""
     @Environment(\.scenePhase) private var scenePhase
+    #if os(macOS)
+    @Environment(\.controlActiveState) private var controlActiveState
+    #endif
 
     var body: some View {
         page
@@ -54,6 +57,14 @@ struct ContentView: View {
             }
     }
 
+    /// This window's undo becomes the store's.
+    private func takeUndo() {
+        guard context.undoManager !== undoManager else { return }
+        // Nothing unsaved is left for undo to trip over: see `GuideView.end`.
+        try? context.save()
+        context.undoManager = undoManager
+    }
+
     /// The list on the page now.
     private var shownID: UUID? {
         (lists.first(where: { $0.id.uuidString == currentID }) ?? lists.first)?.id
@@ -63,7 +74,7 @@ struct ContentView: View {
         if !lists.isEmpty, !guideDone || guideReplay {
             // The first page teaches the app, and plays again from the Gestures line in settings.
             GuideView(lists: lists, isReplay: guideDone) {
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.3)) {
+                withAnimation(reduceMotion ? nil : .ink) {
                     guideDone = true
                     guideReplay = false
                 }
@@ -72,11 +83,14 @@ struct ContentView: View {
         } else if let current = lists.first(where: { $0.id.uuidString == currentID }) ?? lists.first {
             PageView(list: current, lists: lists) { currentID = $0.id.uuidString }
                 // Shake on iPhone and Cmd+Z on Mac undo the last change, a deleted task included.
-                .onChange(of: undoManager, initial: true) { _, new in
-                    // Nothing unsaved is left for undo to trip over: see `GuideView.end`.
-                    try? context.save()
-                    context.undoManager = new
-                }
+                .onChange(of: undoManager, initial: true) { _, _ in takeUndo() }
+                // With two windows there is one store and an undo manager for
+                // each window. The store follows the window in front: before,
+                // it kept the last window's, and undo did nothing in the others.
+                .onChange(of: scenePhase) { _, phase in if phase == .active { takeUndo() } }
+                #if os(macOS)
+                .onChange(of: controlActiveState) { _, state in if state == .key { takeUndo() } }
+                #endif
         } else {
             Color.paper.ignoresSafeArea()
         }

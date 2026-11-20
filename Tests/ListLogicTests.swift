@@ -405,36 +405,56 @@ struct MergeListsTests {
 
     private func store() throws -> ModelContext { container.mainContext }
 
-    @Test func aSecondCopyOfAFirstListIsFoldedIntoTheEarliest() throws {
+    @Test func aFirstListIsFoldedIntoTheOneICloudAlreadyHad() throws {
         let context = try store()
         let life = try #require(try context.lists().first { $0.name == "life" })
         context.addTask("From this phone", to: life)
 
-        // What another device made on its own first launch, and what was written there.
-        let copy = try #require(try context.addList(named: "life"))
-        copy.createdDate = life.createdDate.addingTimeInterval(60)
-        context.addTask("From the other phone", to: copy)
-        let done = try #require(context.addTask("Done there", to: copy))
+        // What iCloud already had: the list of another device, and what was written there.
+        let known = try #require(try context.addList(named: "life"))
+        known.recordData = Data([1])
+        known.createdDate = life.createdDate.addingTimeInterval(-3600)
+        context.addTask("From the other phone", to: known)
+        let done = try #require(context.addTask("Done there", to: known))
         context.strike(done)
 
         #expect(try context.mergeDuplicateDefaultLists() == 1)
 
         let lists = try context.lists()
-        #expect(lists.map(\.name) == ["life", "work", "home"])
-        #expect(lists[0] === life)
-        #expect(life.liveTasks.map(\.text) == ["From this phone", "From the other phone"])
-        #expect(life.archive().flatMap(\.tasks).map(\.text) == ["Done there"])
+        #expect(Set(lists.map(\.name)) == ["life", "work", "home"])
+        #expect(lists.count == 3)
+        // iCloud's list is the one kept: it is the one the other devices have.
+        #expect(lists.contains { $0 === known })
+        #expect(known.liveTasks.map(\.text) == ["From the other phone", "From this phone"])
+        #expect(known.archive().flatMap(\.tasks).map(\.text) == ["Done there"])
     }
 
-    @Test func theEarliestCopyIsKeptWhicheverDeviceMerges() throws {
+    @Test func iCloudsListIsKeptEvenWhenThisDevicesIsOlder() throws {
         let context = try store()
-        let later = try #require(try context.lists().first { $0.name == "work" })
-        let earlier = try #require(try context.addList(named: "work"))
-        earlier.createdDate = later.createdDate.addingTimeInterval(-3600)
+        let seed = try #require(try context.lists().first { $0.name == "work" })
+        let known = try #require(try context.addList(named: "work"))
+        known.recordData = Data([1])
+        known.createdDate = seed.createdDate.addingTimeInterval(3600)
 
         try context.mergeDuplicateDefaultLists()
 
-        #expect(try context.lists().filter { $0.name == "work" }.map(\.id) == [earlier.id])
+        #expect(try context.lists().filter { $0.name == "work" }.map(\.id) == [known.id])
+    }
+
+    @Test func aSecondListTheUserNamesLikeAFirstOneIsTheirsToKeep() throws {
+        let context = try store()
+        // Made by the user on this device: not a seed, and not from iCloud.
+        try context.addList(named: "home")
+        #expect(try context.mergeDuplicateDefaultLists() == 0)
+        #expect(try context.lists().filter { $0.name == "home" }.count == 2)
+
+        // Nor once both have been sent to iCloud and are no longer seeds.
+        for list in try context.lists() {
+            list.isSeeded = false
+            list.recordData = Data([1])
+        }
+        #expect(try context.mergeDuplicateDefaultLists() == 0)
+        #expect(try context.lists().filter { $0.name == "home" }.count == 2)
     }
 
     @Test func listsTheUserNamedAreLeftAlone() throws {

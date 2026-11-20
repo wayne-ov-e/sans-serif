@@ -332,6 +332,65 @@ final class WalkthroughTests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground)
     }
 
+    /// What is done can be deleted from the archive: one task with a hold,
+    /// or everything under a heading, which asks first.
+    func testWhatIsDoneIsDeletedFromTheArchive() {
+        XCTAssertTrue(app.buttons["skip"].waitForExistence(timeout: 6))
+        app.buttons["skip"].tap()
+        XCTAssertTrue(app.buttons["life"].waitForExistence(timeout: 5))
+        point(0.5, 0.5).tap()
+        for task in ["Bins\n", "Bottles\n", "Boxes\n", "Stays"] {
+            type(task)
+            Thread.sleep(forTimeInterval: 1)
+        }
+        app.buttons["done"].tap()
+        XCTAssertTrue(app.buttons["Stays"].waitForExistence(timeout: 3))
+        Thread.sleep(forTimeInterval: 0.8)
+        for task in ["Bins", "Bottles", "Boxes"] {
+            drag(acrossLine: task)
+            XCTAssertTrue(gone(app.buttons[task]), "a struck task leaves the page")
+        }
+
+        drag(from: (0.5, 0.7), to: (0.5, 0.45))
+        wait(for: "Done today")
+        wait(for: "Bins")
+
+        // A hold on one of them: it can be put back, copied or deleted.
+        line("Bins").press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Restore"].waitForExistence(timeout: 3), "a held done task has a menu")
+        XCTAssertTrue(app.buttons["Copy"].exists)
+        XCTAssertTrue(app.buttons["Delete all"].exists)
+        XCTAssertFalse(app.buttons["Move to"].exists, "the menu of the page is not this one")
+        app.buttons["Delete"].tap()
+        XCTAssertTrue(gone(line("Bins")), "the one deleted is gone")
+        XCTAssertTrue(line("Bottles").exists)
+        XCTAssertTrue(line("Boxes").exists)
+        Thread.sleep(forTimeInterval: 0.8)
+
+        // Everything under the heading at once asks first, and Keep changes nothing.
+        line("Bottles").press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Delete all"].waitForExistence(timeout: 3))
+        app.buttons["Delete all"].tap()
+        XCTAssertTrue(first("Delete 2 done today?").waitForExistence(timeout: 3), "deleting all asks first")
+        app.buttons["Keep"].tap()
+        XCTAssertTrue(gone(first("Delete 2 done today?")))
+        XCTAssertTrue(line("Bottles").exists)
+        XCTAssertTrue(line("Boxes").exists)
+        Thread.sleep(forTimeInterval: 0.8)
+
+        line("Boxes").press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Delete all"].waitForExistence(timeout: 3))
+        app.buttons["Delete all"].tap()
+        XCTAssertTrue(app.buttons["Yes, delete"].waitForExistence(timeout: 3))
+        app.buttons["Yes, delete"].tap()
+        XCTAssertTrue(first("Nothing so far.").waitForExistence(timeout: 3), "the archive is empty")
+        XCTAssertFalse(line("Bottles").exists)
+
+        // The page is as it was.
+        drag(from: (0.5, 0.45), to: (0.5, 0.7))
+        XCTAssertTrue(app.buttons["Stays"].waitForExistence(timeout: 3), "what was not struck is still on the page")
+    }
+
     /// The parts the other walks leave out: bringing a task back from the
     /// archive, and renaming and deleting a list.
     func testTheArchiveGivesBackAndListsAreRenamedAndDeleted() {

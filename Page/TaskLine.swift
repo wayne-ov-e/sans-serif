@@ -120,7 +120,7 @@ struct TaskLine: View {
                     if old != new, new { circles += 1 }
                 }
                 .haptic(.pen, trigger: circles)
-                .animation(.easeOut(duration: 0.25), value: task.isLive)
+                .animation(.ink, value: task.isLive)
                 .haptic(.drag, trigger: ticks)
                 .haptic(.release, trigger: releases)
                 .haptic(.edge, trigger: arms)

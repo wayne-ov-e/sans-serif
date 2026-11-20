@@ -182,12 +182,18 @@ struct SharedPage: @unchecked Sendable {
     /// A tap on a task outside the app: struck if it was live, live again if
     /// it was struck. The line changes at once where it is showing, and the
     /// app takes the change into its store the next time it runs.
+    ///
+    /// `expectingLive` is how the line looked where it was tapped. A widget and
+    /// the Live Activity are drawn apart, so one may still show a task live
+    /// that was struck in the other: a tap there means what it showed, and
+    /// changes nothing when that has been done already. It must not undo it.
     @discardableResult
-    func toggle(task: UUID, at date: Date = .now) -> Bool {
+    func toggle(task: UUID, expectingLive: Bool? = nil, at date: Date = .now) -> Bool {
         var snapshot = snapshot
         for list in snapshot.lists.indices {
             guard let line = snapshot.lists[list].lines.firstIndex(where: { $0.id == task }) else { continue }
             let strikes = snapshot.lists[list].lines[line].isLive
+            if let expectingLive, expectingLive != strikes { return false }
             snapshot.lists[list].lines[line].struck = strikes ? date : nil
             snapshot.lists[list].left += strikes ? -1 : 1
             self.snapshot = snapshot

@@ -32,6 +32,8 @@ struct PageView: View {
     @FocusState private var focus: Field?
     @State private var editingID: UUID?
     @State private var draft = ""
+    /// How tall the line being written is: it changes when the words wrap.
+    @State private var draftHeight: CGFloat = 0
     @State private var draftSelection: TextSelection?
     /// The task a keyboard shortcut has asked to strike.
     @State private var pendingStrikeID: UUID?
@@ -40,6 +42,9 @@ struct PageView: View {
     @State private var isLifting = false
     /// The archive is showing instead of the page.
     @State private var showsArchive = false
+    /// "Delete all" was chosen for a struck task: everything under its heading
+    /// of the archive is about to go, and the page asks first.
+    @State private var isConfirmingDone = false
     /// Settings are showing above the page.
     @State private var showsSettings = false
     /// The pages stand in a row, one per list. This is where the row is, in
@@ -52,10 +57,24 @@ struct PageView: View {
     @State private var isTurning = false
     /// A finger is moving the row.
     @State private var isDraggingTurn = false
+    /// Where the open page is while the row moves by itself. See `TurnFlight`.
+    @State private var flight = TurnFlight()
+    /// A finger caught the row while it was moving: how far the row then was
+    /// from where a drag of that length would have put it. The row goes on
+    /// from where it was caught.
+    @State private var caught: CGFloat = 0
+    /// How far the finger had gone when it caught the row, to tell its own
+    /// travel from where the row happened to be.
+    @State private var caughtAt: CGFloat?
     /// The list the row is heading for. The list names already show it.
     @State private var heading: TaskList?
     /// The page turned to is on screen, and the real one is being laid out under it.
     @State private var stripCovers = false
+    /// A turn to another list is putting the archive or settings away. The
+    /// turn was felt as it set off: the sheet leaving is not felt as well
+    /// (Wayne, Nov 19, 2026: from the archive to another list gave two haptics).
+    @State private var turnPutsSheetsAway = false
+    @State private var quiets = 0
     /// Counts turns, so that one cut short by the next does not finish twice.
     @State private var turns = 0
     /// A new list is being named, after the last name.
@@ -64,6 +83,8 @@ struct PageView: View {
     @State private var notice: String?
     /// The list being shared. Its lines stand where settings do, in their place.
     @State private var sharingID: UUID?
+    /// Counts the times the share lines were brought down.
+    @State private var shareOpens = 0
     /// The menu that is open, if any.
     @State private var menu: PageMenu?
     /// Tasks picked out to be deleted together. Nothing while none are being picked.
@@ -104,101 +125,21 @@ struct PageView: View {
             turn: CGFloat(index(of: list)) - place,
             strip: strip,
             stripCovers: stripCovers,
+            flight: flight,
             onTurnChanged: turnChanged,
             onTurnEnded: turnEnded,
+            followsEnd: followsEnd,
+            endKey: endKey,
             onPullPastEnd: pullPastEnd,
             onPullPastTop: pullPastTop
         ) {
-            if let shared = lists.first(where: { $0.id == sharingID }) {
-                ShareLines(list: shared) {
-                    // Leaving is deleting the list here: the page asks first.
-                    showsSettings = false
-                    menu = .list(shared.id, confirmingDelete: true)
-                }
-            } else {
-                SettingsLines()
-            }
+            headerLines
         } content: {
-            TaskLines(
-                tasks: tasksOnPage,
-                focus: $focus,
-                editingID: $editingID,
-                actions: StrikeActions(
-                    strike: strike, pauseHold: pauseHold, resumeHold: startHold, restore: restore,
-                    dragBegan: crossingBegan, dragEnded: crossingEnded
-                ),
-                isLifting: $isLifting,
-                draft: $draft,
-                draftSelection: $draftSelection,
-                submitDraft: submitDraft,
-                menuTaskID: menu?.taskID,
-                menuOptions: taskMenuOptions,
-                openMenu: { menu = .task($0.id, moving: false) },
-                closeMenu: { menu = nil },
-                pendingStrikeID: $pendingStrikeID,
-                picked: picked,
-                pick: { task in
-                    isConfirmingPicked = false
-                    if picked?.contains(task.id) == true { picked?.remove(task.id) } else { picked?.insert(task.id) }
-                }
-            )
+            taskLines
         } archive: {
-            ArchiveLines(list: list, focus: $focus)
+            archiveLines
         } footer: {
-            Group {
-            if keyboardIsUp, let which = HourEntry.shared.typing {
-                // A work hour is being typed in settings: AM, PM and done.
-                HourEntryWords(which: which)
-            } else if let notice {
-                Button { self.notice = nil } label: {
-                    Text(notice)
-                        .typeStyle(.monthLabel)
-                        .foregroundStyle(.inkFaded)
-                        .frame(maxWidth: .infinity, minHeight: metrics.minTouchHeight, alignment: .leading)
-                }
-                .buttonStyle(.plain)
-            } else if let picked {
-                // Tasks are being picked out: what to do with them stands where the list names were.
-                MenuRow(
-                    options: pickedOptions(picked),
-                    label: isConfirmingPicked ? "Delete \(picked.count)?" : "\(picked.count) picked"
-                )
-            } else if case .task(_, let moving) = menu {
-                // A task is held: what can be done with it stands where the list names were.
-                MenuRow(options: taskMenuOptions, label: moving ? "Move to" : nil, note: moving ? nil : menuNote)
-            } else if keyboardIsUp, renamingID == nil, !isNamingList {
-                // While writing, the list names make way for a way to stop.
-                // On the right, above the keyboard's own return key, where the thumb already is.
-                BottomWord(word: "done") {
-                    focus = nil
-                    // And for a field that is not the page's own.
-                    if HourEntry.shared.isWritingElsewhere { HourEntry.shared.dones += 1 }
-                }
-                .frame(maxWidth: .infinity, alignment: .trailing)
-            } else {
-            ListNames(
-                lists: lists,
-                current: heading ?? list,
-                select: turn,
-                menuListID: menu?.listID,
-                menuOptions: listMenuOptions,
-                openMenu: { menu = .list($0.id, confirmingDelete: false) },
-                renamingID: $renamingID,
-                focus: $focus,
-                rename: { context.rename($0, to: $1) },
-                isNamingList: $isNamingList,
-                addList: addList,
-                openArchive: { showsArchive = true },
-                openSettings: openSettings
-            )
-            }
-            }
-            // The row of words changes with a short fade. Only the row: an
-            // animation laid over the whole page reaches the text fields too.
-            .animation(.quick, value: menu?.taskID)
-            .animation(.quick, value: notice)
-            .animation(.quick, value: picked != nil)
-            .animation(.quick, value: isConfirmingPicked)
+            footerWords
         }
         // Turning to a list: a swipe ticks where letting go will turn the page.
         // Then, for a swipe or a tap on a name, one short crisp haptic at the
@@ -207,42 +148,29 @@ struct PageView: View {
         .haptic(.selection, trigger: turnArms)
         .haptic(.turn, trigger: turnTaps)
         // The archive and settings, coming and going, are felt the same way.
-        .sheetHaptics(showsArchive)
-        .sheetHaptics(showsSettings)
+        .sheetHaptics(showsArchive, quietly: turnPutsSheetsAway)
+        // The question about deleting what is done is asked afresh for each menu.
+        .onChange(of: menu) { _, _ in isConfirmingDone = false }
+        // A line put down: whatever was struck meanwhile may leave now.
+        .onChange(of: isLifting) { _, lifting in if !lifting { restartHold() } }
+        // The task or list a menu was open on has gone, from here or another device.
+        .onChange(of: menuIsStale) { _, stale in if stale { menu = nil } }
+        .sheetHaptics(showsSettings, quietly: turnPutsSheetsAway)
+        // The lines above the page put away while a name or an hour is being
+        // typed in them: the typing ends and what was typed is kept.
+        .onChange(of: showsSettings) { _, shows in
+            if !shows, keysAreElsewhere { HourEntry.shared.dones += 1 }
+        }
         .haptic(.edge, trigger: bumps)
         .haptic(.putDown, trigger: removals)
         .haptic(.pen, trigger: copies)
         .haptic(.warning, trigger: isConfirmingDelete) { $0 }
         .haptic(.pen, trigger: menu?.listID) { $0 != nil }
         // At rest the row stands at the open list. Lists can be added, removed and reordered.
-        .onChange(of: lists.map(\.id), initial: true) {
-            if !isTurning { position = CGFloat(index(of: list)) }
-        }
-        .onChange(of: list.id) {
-            if !isTurning { position = CGFloat(index(of: list)) }
-            // What was held or half done belongs to the page that was left.
-            held = [:]
-            isCrossing = false
-            editingID = nil
-            isLifting = false
-            showsSettings = false
-            menu = nil
-            picked = nil
-            isConfirmingPicked = false
-            isNamingList = false
-        }
-        .onChange(of: focus) { old, new in
-            // Leaving the empty line keeps what was typed on it.
-            if old == .newTask, new != .newTask { addDraft() }
-            // With a keyboard, the page listens whenever nothing is being written.
-            // Not while an hour is typed in settings: that field is not one
-            // of the page's own, and taking the keys back here took them from
-            // it, so with a keyboard attached an hour could not be typed at all.
-            if new == nil, Self.hasKeyboard, !keysAreElsewhere { focus = .page }
-        }
-        .onChange(of: keysAreElsewhere) { _, elsewhere in
-            if !elsewhere, focus == nil, Self.hasKeyboard { focus = .page }
-        }
+        .onChange(of: lists.map(\.id), initial: true) { rest() }
+        .onChange(of: list.id) { pageChanged() }
+        .onChange(of: focus) { old, new in focusChanged(old, new) }
+        .onChange(of: keysAreElsewhere) { old, new in keysMoved(old, new) }
         .onAppear { if Self.hasKeyboard { focus = .page } }
         .background {
             Color.clear
@@ -255,6 +183,10 @@ struct PageView: View {
         .onExitCommand(perform: escape)
         #endif
         .focusedSceneValue(\.pageCommands, commands)
+        // Something iCloud has to say: a list that could not be joined.
+        .onReceive(NotificationCenter.default.publisher(for: CloudSync.said)) { note in
+            if let words = note.object as? String { say(words) }
+        }
         #if os(iOS)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
             keyboardIsUp = true
@@ -263,6 +195,124 @@ struct PageView: View {
             keyboardIsUp = false
         }
         #endif
+    }
+
+    // The parts of the page, each on its own: together in `body` they were
+    // more than the compiler would work out.
+
+    /// Sharing a list, or settings, above the page.
+    @ViewBuilder private var headerLines: some View {
+        if let shared = lists.first(where: { $0.id == sharingID }) {
+            ShareLines(list: shared) {
+                // Leaving is deleting the list here: the page asks first.
+                showsSettings = false
+                menu = .list(shared.id, confirmingDelete: true)
+            }
+            // Asked afresh each time the lines are brought down: who is on
+            // the list may have changed since, and no old question is left open.
+            .id(shareOpens)
+        } else {
+            SettingsLines()
+        }
+    }
+
+    private var taskLines: some View {
+        TaskLines(
+            tasks: tasksOnPage,
+            focus: $focus,
+            editingID: $editingID,
+            actions: StrikeActions(
+                strike: strike, pauseHold: pauseHold, resumeHold: startHold, restore: restore,
+                dragBegan: crossingBegan, dragEnded: crossingEnded
+            ),
+            isLifting: $isLifting,
+            draft: $draft,
+            draftSelection: $draftSelection,
+            submitDraft: submitDraft,
+            menuTaskID: menu?.taskID,
+            menuOptions: taskMenuOptions,
+            openMenu: { menu = .task($0.id, moving: false) },
+            closeMenu: { menu = nil },
+            pendingStrikeID: $pendingStrikeID,
+            picked: picked,
+            pick: { task in
+                // Only what is still to do can be picked.
+                guard task.isLive else { return }
+                isConfirmingPicked = false
+                if picked?.contains(task.id) == true { picked?.remove(task.id) } else { picked?.insert(task.id) }
+            },
+            draftRows: { draftHeight = $0 }
+        )
+    }
+
+    /// The row at the bottom of the page: list names, or the words for what is going on.
+    private var footerWords: some View {
+        Group {
+        if keyboardIsUp, let which = HourEntry.shared.typing {
+            // A work hour is being typed in settings: AM, PM and done.
+            HourEntryWords(which: which)
+        } else if let notice {
+            Button { self.notice = nil } label: {
+                Text(notice)
+                    .typeStyle(.monthLabel)
+                    .foregroundStyle(.inkFaded)
+                    .frame(maxWidth: .infinity, minHeight: metrics.minTouchHeight, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+        } else if picked != nil {
+            // Tasks are being picked out: what to do with them stands where the list names were.
+            MenuRow(
+                options: pickedOptions(pickedNow),
+                label: isConfirmingPicked ? "Delete \(pickedNow.count)?" : "\(pickedNow.count) picked"
+            )
+        } else if case .task(_, let moving) = menu {
+            // A task is held: what can be done with it stands where the list names were.
+            MenuRow(
+                options: taskMenuOptions,
+                label: moving ? "Move to" : doneQuestion,
+                note: moving || isConfirmingDone ? nil : menuNote
+            )
+        } else if keyboardIsUp, renamingID == nil, !isNamingList {
+            // While writing, the list names make way for a way to stop.
+            // On the right, above the keyboard's own return key, where the thumb already is.
+            BottomWord(word: "done") {
+                focus = nil
+                // And for a field that is not the page's own.
+                if HourEntry.shared.isWritingElsewhere { HourEntry.shared.dones += 1 }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        } else {
+        ListNames(
+            lists: lists,
+            current: heading ?? list,
+            select: turn,
+            menuListID: menu?.listID,
+            menuOptions: listMenuOptions,
+            openMenu: { menu = .list($0.id, confirmingDelete: false) },
+            renamingID: $renamingID,
+            focus: $focus,
+            rename: { context.rename($0, to: $1) },
+            isNamingList: $isNamingList,
+            addList: addList,
+            openArchive: { showsArchive = true },
+            openSettings: openSettings
+        )
+        }
+        }
+        // The row of words changes with a short fade. Only the row: an
+        // animation laid over the whole page reaches the text fields too.
+        .animation(.quick, value: menu?.taskID)
+        .animation(.quick, value: notice)
+        .animation(.quick, value: picked != nil)
+        .animation(.quick, value: isConfirmingPicked)
+    }
+
+    private var archiveLines: some View {
+        ArchiveLines(
+            list: list, focus: $focus, menuTaskID: menu?.taskID,
+            openMenu: { menu = .task($0.id, moving: false) },
+            closeMenu: { menu = nil }
+        )
     }
 
     /// Live tasks, and struck ones that have not left yet, in page order.
@@ -290,12 +340,14 @@ struct PageView: View {
         let token = holds
         for id in held.keys where held[id] != Self.paused { held[id] = token }
         guard held.values.contains(token), !isCrossing else { return }
+        // Nor while a line is carried: the hold starts again when it is put down.
+        guard !isLifting else { return }
         // The pen is still drawing when the hold starts.
         let drawing = Duration.seconds(TaskLine.secondsPerLine * Double(TaskLine.lineLimit))
         Task { @MainActor in
             try? await Task.sleep(for: Self.hold + drawing)
             // A newer hold has taken over, or a finger is on a task again.
-            guard !isCrossing, held.values.contains(token) else { return }
+            guard !isCrossing, !isLifting, held.values.contains(token) else { return }
             withAnimation(reduceMotion ? nil : .shuffle) {
                 held = held.filter { $0.value != token }
             }
@@ -309,6 +361,8 @@ struct PageView: View {
             isDraggingTurn = false
             isTurning = false
             isTurnArmed = false
+            caught = 0
+            caughtAt = nil
             position = CGFloat(index(of: list))
         }
         // Whatever was about to leave waits.
@@ -364,7 +418,8 @@ struct PageView: View {
     /// Sends the row of pages to a list. Called again before it has arrived,
     /// the row goes on from where it is, at the speed it has.
     /// What was being written stays on the list it was written on.
-    private func go(to target: TaskList, animation: Animation = .turn) {
+    /// `speed`: a finger let go of the row at this speed, in pages a second.
+    private func go(to target: TaskList, animation: Animation? = nil, speed: CGFloat? = nil) {
         addDraft()
         focus = nil
         let changesCourse = target !== (heading ?? list)
@@ -373,6 +428,18 @@ struct PageView: View {
         heading = target
         turns += 1
         let token = turns
+        if target !== list {
+            // Counted apart from the turns: a later turn back to the open
+            // page starts no quiet of its own, and must not keep this one.
+            quiets += 1
+            let quiet = quiets
+            turnPutsSheetsAway = true
+            // Until the turn has landed and the sheets are away, and a little longer.
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1.2))
+                if quiet == quiets { turnPutsSheetsAway = false }
+            }
+        }
         // Felt at the instant the turn is asked for, as the page sets off.
         if changesCourse, !PenHaptics.shared.snap() { turnTaps += 1 }
         var still = Transaction()
@@ -390,9 +457,17 @@ struct PageView: View {
             }
             return
         }
+        // How far there is to go: from where the row is, if it is already moving.
+        let end = CGFloat(index(of: target))
+        let start = isTurning ? position : CGFloat(index(of: list))
+        var spring = animation ?? .turn(across: abs(end - start))
+        if animation == nil, let speed {
+            // Positive towards the page turned to.
+            spring = .turn(across: abs(end - start), atSpeed: end > start ? speed : -speed)
+        }
         isTurning = true
-        withAnimation(animation) {
-            position = CGFloat(index(of: target))
+        withAnimation(spring) {
+            position = end
         } completion: {
             // Another turn took over before this one arrived.
             guard token == turns else { return }
@@ -448,17 +523,23 @@ struct PageView: View {
         // A new swipe while the row is still moving by itself: that turn is
         // finished at once, and the row follows the finger from the next movement on.
         guard isDraggingTurn || !isTurning else {
-            settle()
+            catchRow(at: amount)
             return
         }
         // The first few points are left for a task to claim the drag as a strike.
         guard isDraggingTurn || abs(amount) > 0.03 else { return }
+        if !isDraggingTurn {
+            caught = 0
+            caughtAt = nil
+        }
         isDraggingTurn = true
         isTurning = true
         heading = nil
         let here = CGFloat(index(of: list))
         let last = CGFloat(max(lists.count - 1, 0))
-        var wanted = here - amount.clamped(to: -1...1)
+        // How far the row has been moved from the open page, the catch included.
+        let amount = (amount - caught).clamped(to: -1...1)
+        var wanted = here - amount
         // There is no page past the first or the last: the row gives a little and no more.
         if wanted < 0 { wanted *= 0.2 }
         if wanted > last { wanted = last + (wanted - last) * 0.2 }
@@ -471,15 +552,59 @@ struct PageView: View {
         }
     }
 
+    /// A finger comes down on the row while it is moving by itself. The row
+    /// stops where it is and follows the finger from there: it does not jump
+    /// to the end of the turn first. The page nearest the middle of the paper
+    /// becomes the open one.
+    private func catchRow(at amount: CGFloat) {
+        let now = CGFloat(index(of: list)) - flight.x
+        let nearest = min(max(Int(now.rounded()), 0), max(lists.count - 1, 0))
+        guard lists.indices.contains(nearest) else {
+            settle()
+            return
+        }
+        turns += 1
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still) {
+            if lists[nearest] !== list {
+                select(lists[nearest])
+                showsArchive = false
+                showsSettings = false
+            }
+            position = now
+            stripCovers = false
+            heading = nil
+            isTurning = true
+            isDraggingTurn = true
+        }
+        // A drag of this length from the nearest page would stand at
+        // `nearest - amount`. The row is at `now`.
+        caught = amount - (CGFloat(nearest) - now)
+        caughtAt = amount
+    }
+
     private func turnEnded(_ amount: CGFloat, _ speed: CGFloat) {
         isTurnArmed = false
         guard isDraggingTurn else { return }
         isDraggingTurn = false
+        // The finger's own travel, apart from where a caught row stood.
+        let finger = amount - (caughtAt ?? 0)
+        let wasCaught = caughtAt != nil
+        var amount = amount - caught
+        caught = 0
+        caughtAt = nil
+        // A quick flick turns the way the finger went, wherever the row was caught.
+        let flicked = abs(finger) > 0.05 && speed * finger > 0 && abs(speed) > 1.2
+        if flicked { amount = finger }
         let neighbour = lists.neighbour(of: list, by: amount < 0 ? 1 : -1)
-        // Far enough, or a quick flick the same way.
-        let flicked = abs(amount) > 0.05 && speed * amount > 0 && abs(speed) > 1.2
-        if amount != 0, let neighbour, abs(amount) > 0.35 || flicked {
-            go(to: neighbour)
+        // Far enough. A row that was caught and let go again goes to the page
+        // nearest the middle: it is not sent back against the turn it was on.
+        let far = abs(amount) > (wasCaught ? 0.5 : 0.35)
+        if amount != 0, let neighbour, far || flicked {
+            // The page goes on at the speed the finger had. The row moves
+            // against the finger's count: a drag to the left is a turn onward.
+            go(to: neighbour, speed: -speed)
         } else {
             // Pulled well past the first or the last page: the paper stops there.
             if neighbour == nil, abs(amount) > 0.2 { bumps += 1 }
@@ -503,6 +628,7 @@ struct PageView: View {
                 }
             }
         }
+        if !task.isLive { return doneOptions(task) }
         // No Edit: a tap on the task already edits it.
         var options: [MenuOption] = []
         if lists.count > 1 {
@@ -533,6 +659,79 @@ struct PageView: View {
             withAnimation(reduceMotion ? nil : .shuffle) { context.delete(task) }
         })
         return options
+    }
+
+    /// A struck task held in the archive: put it back, copy it, delete it, or
+    /// delete everything done under the same heading (Wayne, Nov 19, 2026:
+    /// "being able to delete past done things in archive").
+    private func doneOptions(_ task: TaskItem) -> [MenuOption] {
+        let group = list.doneGroup(with: task)
+        if isConfirmingDone {
+            return [
+                MenuOption(title: "Yes, delete", isDestructive: true) {
+                    menu = nil
+                    removals += 1
+                    withAnimation(reduceMotion ? nil : .shuffle) {
+                        _ = context.deleteTasks(Set(group.map(\.id)), in: list)
+                    }
+                },
+                MenuOption(title: "Keep") { menu = nil },
+            ]
+        }
+        var options = [
+            MenuOption(title: "Restore") {
+                menu = nil
+                withAnimation(reduceMotion ? nil : .shuffle) { context.restore(task) }
+            },
+            MenuOption(title: "Copy") {
+                menu = nil
+                copies += 1
+                copy(task.text)
+            },
+            // No confirmation for one: it is undone with a shake or Cmd+Z.
+            MenuOption(title: "Delete", isDestructive: true) {
+                menu = nil
+                removals += 1
+                withAnimation(reduceMotion ? nil : .shuffle) { context.delete(task) }
+            },
+        ]
+        // Everything under the same heading, at once. This asks first.
+        if group.count > 1 {
+            options.append(MenuOption(title: "Delete all", isDestructive: true) { isConfirmingDone = true })
+        }
+        return options
+    }
+
+    /// The question before everything under a heading of the archive is deleted.
+    private var doneQuestion: String? {
+        guard isConfirmingDone, case .task(let id, _) = menu,
+              let task = (list.tasks ?? []).first(where: { $0.id == id }), !task.isLive
+        else { return nil }
+        let group = list.doneGroup(with: task)
+        if list.doneToday().contains(where: { $0.id == id }) { return "Delete \(group.count) done today?" }
+        let month = (task.struckDate ?? .now).formatted(.dateTime.month(.wide))
+        return "Delete \(group.count) from \(month)?"
+    }
+
+    /// The picked tasks that are still on the page to do. One that was struck
+    /// or deleted meanwhile, here or on another device, is not counted and
+    /// not deleted with the rest.
+    private var pickedNow: Set<UUID> {
+        (picked ?? []).intersection(tasksOnPage.filter(\.isLive).map(\.id))
+    }
+
+    /// The menu is open on something that is no longer there to be held.
+    private var menuIsStale: Bool {
+        switch menu {
+        case .task(let id, _):
+            guard let task = (list.tasks ?? []).first(where: { $0.id == id }) else { return true }
+            // On the page, a task that has left it. In the archive, one put back.
+            return showsArchive ? task.isLive : !tasksOnPage.contains { $0.id == id }
+        case .list(let id, _):
+            return !lists.contains { $0.id == id }
+        case nil:
+            return false
+        }
     }
 
     /// What can be done with the tasks picked out. Deleting several asks first.
@@ -607,7 +806,7 @@ struct PageView: View {
     private func addList(named name: String) {
         guard let new = try? context.addList(named: name) else { return }
         settle()
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { select(new) }
+        withAnimation(reduceMotion ? nil : .quick) { select(new) }
     }
 
     /// On a shared list, who wrote the held task and who struck it.
@@ -616,6 +815,55 @@ struct PageView: View {
               let task = (list.tasks ?? []).first(where: { $0.id == id })
         else { return nil }
         return task.byLine
+    }
+
+    /// At rest the row of names stands at the open list.
+    private func rest() {
+        if !isTurning { position = CGFloat(index(of: list)) }
+    }
+
+    private func pageChanged() {
+        rest()
+        // What was held or half done belongs to the page that was left.
+        held = [:]
+        isCrossing = false
+        editingID = nil
+        isLifting = false
+        showsSettings = false
+        menu = nil
+        picked = nil
+        isConfirmingPicked = false
+        isNamingList = false
+    }
+
+    private func focusChanged(_ old: Field?, _ new: Field?) {
+        // Leaving the empty line keeps what was typed on it.
+        if old == .newTask, new != .newTask { addDraft() }
+        // With a keyboard, the page listens whenever nothing is being written.
+        // Not while an hour is typed in settings: that field is not one
+        // of the page's own, and taking the keys back here took them from
+        // it, so with a keyboard attached an hour could not be typed at all.
+        if new == nil, Self.hasKeyboard, !keysAreElsewhere { focus = .page }
+    }
+
+    private func keysMoved(_ before: Bool, _ elsewhere: Bool) {
+        if !elsewhere, focus == nil, Self.hasKeyboard { focus = .page }
+    }
+
+    /// A new task is being written: the page keeps its line in the best place.
+    private var followsEnd: Bool {
+        let field: Field? = focus
+        return field == .newTask && !showsArchive
+    }
+
+    /// Changes when the end of the page moves while a task is being written.
+    private var endKey: Int {
+        var hasher = Hasher()
+        hasher.combine(tasksOnPage.count)
+        // Not what is typed: moving the page at every letter lost letters,
+        // as the field was drawn again under the keys. Only a new row.
+        hasher.combine(draftHeight)
+        return hasher.finalize()
     }
 
     /// An hour or a name is being typed in the lines above the page.
@@ -636,6 +884,7 @@ struct PageView: View {
         focus = nil
         showsArchive = false
         sharingID = target.id
+        shareOpens += 1
         showsSettings = true
     }
 
@@ -709,7 +958,7 @@ struct PageView: View {
             escape()
             return .handled
         }
-        guard !showsArchive, !showsSettings, menu == nil, !isTurning,
+        guard !showsArchive, !showsSettings, menu == nil, !isTurning, picked == nil,
               press.modifiers.subtracting([.shift, .capsLock]).isEmpty,
               press.characters.count == 1, let character = press.characters.first,
               character.isLetter || character.isNumber || character.isPunctuation || character.isSymbol
@@ -725,7 +974,11 @@ struct PageView: View {
 
     /// Escape puts away whatever is open, one thing at a time.
     private func escape() {
-        if menu != nil {
+        if isConfirmingPicked {
+            isConfirmingPicked = false
+        } else if picked != nil {
+            stopPicking()
+        } else if menu != nil {
             menu = nil
         } else if isWriting {
             focus = nil
@@ -746,6 +999,7 @@ struct PageView: View {
             toggleSettings: {
                 guard !isTurning else { return }
                 menu = nil
+                stopPicking()
                 focus = nil
                 showsArchive = false
                 if showsSettings { showsSettings = false } else { openSettings() }
@@ -754,6 +1008,7 @@ struct PageView: View {
             toggleArchive: {
                 guard !isTurning else { return }
                 menu = nil
+                stopPicking()
                 focus = nil
                 showsSettings = false
                 showsArchive.toggle()

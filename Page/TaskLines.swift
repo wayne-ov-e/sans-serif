@@ -25,6 +25,8 @@ struct TaskLines: View {
     /// The tasks picked out to be deleted together. Nothing while none are being picked.
     var picked: Set<UUID>?
     var pick: ((TaskItem) -> Void)?
+    /// The empty line grew or shrank by a row as it was written on.
+    var draftRows: ((CGFloat) -> Void)?
 
     @Environment(\.modelContext) private var context
     @Environment(\.pageMetrics) private var metrics
@@ -113,12 +115,20 @@ struct TaskLines: View {
             // cursor in it, it is a blank line.
             LineField(text: $draft, selection: Self.cursorCanBePlaced ? draftSelection : .constant(nil), onReturn: submitDraft)
                 .focused(focus, equals: .newTask)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height.rounded() } action: { draftRows?($0) }
                 .accessibilityLabel("New task")
                 .receded(menuTaskID != nil)
                 .disabled(picked != nil)
                 .fadesUnderListNames()
         }
         .coordinateSpace(.named(Self.space))
+        // The page changed under a carried line, from another device or a
+        // widget: its places no longer mean what they did. It is put back.
+        .onChange(of: tasks.map(\.id)) { _, _ in
+            guard carried != nil else { return }
+            carried = nil
+            isLifting = false
+        }
         .animation(.quick, value: menuTaskID)
         .animation(.quick, value: menuOptions.map(\.id))
         .haptic(.pen, trigger: menuTaskID) { $0 != nil }
@@ -209,6 +219,9 @@ struct TaskLines: View {
 
     /// How far the carried line sits from where it started once it is in its new place.
     private func restingOffset(of moving: Carried) -> CGFloat {
+        // The places were counted when the line was picked up. Should the page
+        // have changed since, nothing is read past its end.
+        guard moving.from < tasks.count, moving.to < tasks.count, moving.from >= 0, moving.to >= 0 else { return 0 }
         let passed = moving.to > moving.from
             ? tasks[(moving.from + 1)...moving.to]
             : tasks[moving.to..<moving.from]
@@ -230,7 +243,8 @@ struct TaskLines: View {
             }
         }
         withTransaction(transaction) {
-            if moving.to != moving.from, tasks.indices.contains(moving.from) {
+            // Only if the line carried is still where it was picked up from.
+            if moving.to != moving.from, tasks.indices.contains(moving.from), tasks[moving.from].id == moving.id {
                 drops += 1
                 var others = tasks
                 let task = others.remove(at: moving.from)

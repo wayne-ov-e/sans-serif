@@ -313,7 +313,10 @@ struct ListEdgeTests {
             context.strike(task, at: when)
         }
         context.addTask("Still live", to: list)
-        #expect(list.doneToday(at: now, calendar: utc).map(\.text) == ["Last second", "Morning", "Midnight"])
+        // What a clock running ahead struck "tomorrow" counts as today's:
+        // before, it stood under no heading at all.
+        #expect(list.doneToday(at: now, calendar: utc).map(\.text)
+            == ["Tomorrow's first", "Last second", "Morning", "Midnight"])
         // The months below do not repeat today, and do not lose what came after it either.
         let below = list.archive(calendar: utc, before: now).flatMap(\.tasks).map(\.text)
         #expect(below == ["Yesterday's last"])
@@ -411,26 +414,31 @@ struct ListEdgeTests {
 
     // MARK: Lists meeting
 
-    @Test func threeCopiesOfAFirstListBecomeOneWithEverythingInIt() throws {
+    @Test func aFirstListGoesIntoTheEarliestOfICloudsAndICloudsOwnAreLeftAlone() throws {
         try PageStore.seedDefaultListsIfNeeded(in: context)
         let life = try #require(try context.lists().first { $0.name == "life" })
-        life.createdDate = date(2026, 1, 1)
-        context.addTask("First device", to: life)
+        context.addTask("This device", to: life)
+        let done = try #require(context.addTask("This device done", to: life))
+        context.strike(done, at: date(2026, 3, 9))
+        var known: [TaskList] = []
         for (index, name) in ["Second device", "Third device"].enumerated() {
             let copy = TaskList(name: "life", order: Double(10 + index))
             copy.createdDate = date(2026, 2, 1 + index)
+            copy.recordData = Data([1])
             context.insert(copy)
             context.addTask(name, to: copy)
-            let done = try #require(context.addTask("\(name) done", to: copy))
-            context.strike(done, at: date(2026, 3, 1 + index))
+            known.append(copy)
         }
         try context.save()
 
-        #expect(try context.mergeDuplicateDefaultLists() == 2)
-        #expect(try context.lists().map(\.name) == ["life", "work", "home"])
-        #expect(life.liveTasks.map(\.text) == ["First device", "Second device", "Third device"])
-        #expect(life.archive(calendar: utc).flatMap(\.tasks).map(\.text) == ["Third device done", "Second device done"])
-        #expect(Set((life.tasks ?? []).map(\.order)).count == 5)
+        #expect(try context.mergeDuplicateDefaultLists() == 1)
+        // The seed is gone. The two lists iCloud had are both still there:
+        // nothing iCloud holds is ever deleted for having the same name.
+        #expect(try context.lists().filter { $0.name == "life" }.count == 2)
+        #expect(known[0].liveTasks.map(\.text) == ["Second device", "This device"])
+        #expect(known[0].archive(calendar: utc).flatMap(\.tasks).map(\.text) == ["This device done"])
+        #expect(known[1].liveTasks.map(\.text) == ["Third device"])
+        #expect(Set((known[0].tasks ?? []).map(\.order)).count == 3)
         #expect(try context.mergeDuplicateDefaultLists() == 0, "a second pass has nothing to do")
     }
 
@@ -438,14 +446,20 @@ struct ListEdgeTests {
         let when = date(2026, 1, 1)
         let first = TaskList(name: "work", order: 0)
         let second = TaskList(name: "work", order: 1)
-        first.createdDate = when
-        second.createdDate = when
-        context.insert(first)
-        context.insert(second)
+        for known in [first, second] {
+            known.createdDate = when
+            known.recordData = Data([1])
+            context.insert(known)
+        }
+        let seed = TaskList(name: "work", order: 2)
+        seed.isSeeded = true
+        context.insert(seed)
+        context.addTask("Written here", to: seed)
         try context.save()
-        let keeper = [first, second].min { $0.id.uuidString < $1.id.uuidString }
+        let keeper = try #require([first, second].min { $0.id.uuidString < $1.id.uuidString })
         try context.mergeDuplicateDefaultLists()
-        #expect(try context.lists().map(\.id) == [keeper?.id])
+        #expect(keeper.liveTasks.map(\.text) == ["Written here"])
+        #expect(try context.lists().count == 2)
     }
 
     @Test func aFirstListTheUserRenamedIsNotACopy() throws {
@@ -734,5 +748,56 @@ struct BulkDeleteTests {
         RecordCoder.write(fields, to: record)
         #expect(record.changedKeys().contains("editedBy"))
         #expect(RecordCoder.taskFields(of: record).editedBy == "Ben")
+    }
+}
+
+@MainActor @Suite struct DoneDeleted {
+    let container: ModelContainer
+    var context: ModelContext { container.mainContext }
+    init() throws { container = try PageStore.makeContainer(inMemory: true) }
+
+    private func struck(_ text: String, in list: TaskList, daysAgo: Int, from now: Date) throws -> TaskItem {
+        let task = try #require(context.addTask(text, to: list))
+        context.strike(task, at: now.addingTimeInterval(-86_400 * Double(daysAgo)))
+        return task
+    }
+
+    @Test func whatStandsUnderOneHeadingGoesTogetherAndNothingElse() throws {
+        // The middle of a month, at noon, so that days ago stay in the months meant.
+        var calendar = Calendar.current
+        calendar.timeZone = .current
+        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 11, day: 19, hour: 12)))
+        let list = try #require(try context.addList(named: "life"))
+        let other = try #require(try context.addList(named: "work"))
+        let live = try #require(context.addTask("Still to do", to: list))
+        let today = try struck("Today", in: list, daysAgo: 0, from: now)
+        let alsoToday = try struck("Also today", in: list, daysAgo: 0, from: now)
+        let thisMonth = try struck("Last week", in: list, daysAgo: 7, from: now)
+        let alsoThisMonth = try struck("Two weeks ago", in: list, daysAgo: 14, from: now)
+        let lastMonth = try struck("October", in: list, daysAgo: 30, from: now)
+        let elsewhere = try struck("Elsewhere", in: other, daysAgo: 7, from: now)
+
+        #expect(Set(list.doneGroup(with: today, now: now).map(\.id)) == [today.id, alsoToday.id])
+        #expect(Set(list.doneGroup(with: thisMonth, now: now).map(\.id)) == [thisMonth.id, alsoThisMonth.id])
+        #expect(list.doneGroup(with: lastMonth, now: now).map(\.id) == [lastMonth.id])
+        #expect(list.doneGroup(with: live, now: now).isEmpty, "a live task has no heading in the archive")
+        #expect(list.doneGroup(with: elsewhere, now: now).isEmpty, "nor a task of another list")
+
+        let going = Set(list.doneGroup(with: thisMonth, now: now).map(\.id))
+        #expect(context.deleteTasks(going, in: list) == 2)
+        try context.save()
+        let left = Set((list.tasks ?? []).map(\.text))
+        #expect(left == ["Still to do", "Today", "Also today", "October"])
+        #expect((other.tasks ?? []).count == 1)
+    }
+
+    @Test func oneDoneTaskIsDeletedAndTheRestStay() throws {
+        let list = try #require(try context.addList(named: "life"))
+        let one = try struck("One", in: list, daysAgo: 0, from: .now)
+        _ = try struck("Two", in: list, daysAgo: 0, from: .now)
+        context.delete(one)
+        try context.save()
+        #expect((list.tasks ?? []).map(\.text) == ["Two"])
+        #expect(list.doneToday().count == 1)
     }
 }
