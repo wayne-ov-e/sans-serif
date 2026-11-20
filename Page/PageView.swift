@@ -479,6 +479,15 @@ struct PageView: View {
             spring = .turn(across: abs(end - start), atSpeed: end > start ? speed : -speed)
         }
         isTurning = true
+        // When the spring is nominally over the page is still coming to rest:
+        // measured, 5 pt from its place. The swap takes two or three frames,
+        // and done at that moment it held the page there before it went on,
+        // so the turn seemed to catch at the end (Wayne, Nov 20, 2026:
+        // "animation ending still feels a bit not smooth"). So the swap waits
+        // a little longer, until the page is within half a point. Waiting for
+        // the spring to be wholly at rest took 0.65 s, too long before the
+        // page can be written on.
+        let rest = Animation.turnTime(across: abs(end - start)) * 0.45
         withAnimation(spring) {
             position = end
         } completion: {
@@ -489,15 +498,17 @@ struct PageView: View {
                 heading = nil
                 return
             }
-            // The real page takes the place of the one that slid in. The one that
-            // slid in stays on top for a moment, so the swap is never seen.
-            withTransaction(still) {
-                stripCovers = true
-                select(target)
-                showsArchive = false
-                showsSettings = false
-            }
             Task { @MainActor in
+                try? await Task.sleep(for: .seconds(rest))
+                guard token == turns else { return }
+                // The real page takes the place of the one that slid in. The one that
+                // slid in stays on top for a moment, so the swap is never seen.
+                withTransaction(still) {
+                    stripCovers = true
+                    select(target)
+                    showsArchive = false
+                    showsSettings = false
+                }
                 try? await Task.sleep(for: .milliseconds(80))
                 guard token == turns else { return }
                 withTransaction(still) {
@@ -1222,3 +1233,4 @@ private struct DayWatch: ViewModifier {
             .onChange(of: scenePhase) { _, phase in if phase == .active { days += 1 } }
     }
 }
+

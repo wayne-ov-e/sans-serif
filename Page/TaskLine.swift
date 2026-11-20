@@ -152,7 +152,11 @@ struct TaskLine: View {
     /// The task's words. One that repeats says so after them, in a small
     /// faint word raised like the count beside a list name: "daily", "mon wed
     /// fri", "1st". Part of the same text, so it wraps with the words.
-    private var words: Text {
+    private var words: Text { Self.words(of: task, metrics: metrics) }
+
+    /// The same words wherever the task is drawn: on the page, and on the
+    /// page that slides in beside it during a turn.
+    static func words(of task: TaskItem, metrics: PageMetrics) -> Text {
         guard task.isLive, let mark = task.rule?.mark else { return Text(task.text) }
         let small = Text(mark)
             .font(.system(size: metrics.countSize, design: .serif))
