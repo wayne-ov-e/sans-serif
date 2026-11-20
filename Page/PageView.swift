@@ -66,6 +66,10 @@ struct PageView: View {
     @State private var sharingID: UUID?
     /// The menu that is open, if any.
     @State private var menu: PageMenu?
+    /// Tasks picked out to be deleted together. Nothing while none are being picked.
+    @State private var picked: Set<UUID>?
+    /// The question before the picked tasks are deleted is showing.
+    @State private var isConfirmingPicked = false
     /// The list whose name is being rewritten.
     @State private var renamingID: UUID?
     /// Struck tasks still on the page, each with the token of its current hold.
@@ -131,7 +135,12 @@ struct PageView: View {
                 menuOptions: taskMenuOptions,
                 openMenu: { menu = .task($0.id, moving: false) },
                 closeMenu: { menu = nil },
-                pendingStrikeID: $pendingStrikeID
+                pendingStrikeID: $pendingStrikeID,
+                picked: picked,
+                pick: { task in
+                    isConfirmingPicked = false
+                    if picked?.contains(task.id) == true { picked?.remove(task.id) } else { picked?.insert(task.id) }
+                }
             )
         } archive: {
             ArchiveLines(list: list, focus: $focus)
@@ -148,6 +157,12 @@ struct PageView: View {
                         .frame(maxWidth: .infinity, minHeight: metrics.minTouchHeight, alignment: .leading)
                 }
                 .buttonStyle(.plain)
+            } else if let picked {
+                // Tasks are being picked out: what to do with them stands where the list names were.
+                MenuRow(
+                    options: pickedOptions(picked),
+                    label: isConfirmingPicked ? "Delete \(picked.count)?" : "\(picked.count) picked"
+                )
             } else if case .task(_, let moving) = menu {
                 // A task is held: what can be done with it stands where the list names were.
                 MenuRow(options: taskMenuOptions, label: moving ? "Move to" : nil, note: moving ? nil : menuNote)
@@ -182,6 +197,8 @@ struct PageView: View {
             // animation laid over the whole page reaches the text fields too.
             .animation(.quick, value: menu?.taskID)
             .animation(.quick, value: notice)
+            .animation(.quick, value: picked != nil)
+            .animation(.quick, value: isConfirmingPicked)
         }
         // Turning to a list: a swipe ticks where letting go will turn the page.
         // Then, for a swipe or a tap on a name, one short crisp haptic at the
@@ -210,6 +227,8 @@ struct PageView: View {
             isLifting = false
             showsSettings = false
             menu = nil
+            picked = nil
+            isConfirmingPicked = false
             isNamingList = false
         }
         .onChange(of: focus) { old, new in
@@ -425,7 +444,7 @@ struct PageView: View {
     /// Not while writing or carrying a task, or in settings.
     private func turnChanged(_ amount: CGFloat) {
         // Not while a task is being struck or a strike undone: that drag is the pen's.
-        guard !isWriting, !isLifting, !showsSettings, !isCrossing, menu == nil else { return }
+        guard !isWriting, !isLifting, !showsSettings, !isCrossing, menu == nil, picked == nil else { return }
         // A new swipe while the row is still moving by itself: that turn is
         // finished at once, and the row follows the finger from the next movement on.
         guard isDraggingTurn || !isTurning else {
@@ -494,6 +513,14 @@ struct PageView: View {
             copies += 1
             copy(task.text)
         })
+        // Several at once: this one is picked, and a tap on each of the others picks it too.
+        if (list.tasks ?? []).count(where: \.isLive) > 1 {
+            options.append(MenuOption(title: "Select") {
+                menu = nil
+                focus = nil
+                picked = [task.id]
+            })
+        }
         // The one that matters. Drawing a loop round the task does the same.
         options.append(MenuOption(title: task.isCircled ? "Uncircle" : "Circle") {
             menu = nil
@@ -506,6 +533,35 @@ struct PageView: View {
             withAnimation(reduceMotion ? nil : .shuffle) { context.delete(task) }
         })
         return options
+    }
+
+    /// What can be done with the tasks picked out. Deleting several asks first.
+    private func pickedOptions(_ picked: Set<UUID>) -> [MenuOption] {
+        if isConfirmingPicked {
+            return [
+                MenuOption(title: "Yes, delete", isDestructive: true) {
+                    removals += 1
+                    withAnimation(reduceMotion ? nil : .shuffle) { _ = context.deleteTasks(picked, in: list) }
+                    stopPicking()
+                },
+                MenuOption(title: "Keep") { isConfirmingPicked = false },
+            ]
+        }
+        var options: [MenuOption] = []
+        if !picked.isEmpty {
+            options.append(MenuOption(title: "Delete", isDestructive: true) { isConfirmingPicked = true })
+        }
+        let live = Set(tasksOnPage.filter(\.isLive).map(\.id))
+        if picked != live {
+            options.append(MenuOption(title: "All") { self.picked = live })
+        }
+        options.append(MenuOption(title: "done") { stopPicking() })
+        return options
+    }
+
+    private func stopPicking() {
+        picked = nil
+        isConfirmingPicked = false
     }
 
     /// Rename and Delete list. Deleting asks first, because the tasks and the archive go with it.
@@ -608,7 +664,7 @@ struct PageView: View {
     /// Dragging up past the end of the page shows what is done, or puts settings away.
     /// Not while writing or carrying.
     private func pullPastEnd() {
-        guard !isWriting, !isLifting, menu == nil else { return }
+        guard !isWriting, !isLifting, menu == nil, picked == nil else { return }
         if showsSettings {
             showsSettings = false
         } else {
@@ -619,7 +675,7 @@ struct PageView: View {
     /// Dragging down past the top of the archive goes back to the page.
     /// Dragging down past the top of the page brings settings down.
     private func pullPastTop() {
-        guard !isWriting, !isLifting, menu == nil else { return }
+        guard !isWriting, !isLifting, menu == nil, picked == nil else { return }
         if showsArchive {
             showsArchive = false
         } else {
@@ -714,6 +770,11 @@ struct PageView: View {
 
     /// Tapping empty paper starts a task. While writing, it puts the pen down instead.
     private func tapPaper() {
+        // A tap on the empty paper while tasks are picked out lets them all go.
+        guard picked == nil else {
+            stopPicking()
+            return
+        }
         // A tap on the page behind a menu puts it away.
         guard menu == nil else {
             menu = nil

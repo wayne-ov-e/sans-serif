@@ -589,3 +589,71 @@ struct SameOrderTests {
         #expect(Set(list.liveTasks.map(\.order)).count == 3)
     }
 }
+
+@MainActor
+@Suite("Deleting several tasks at once")
+struct BulkDeleteTests {
+    let container: ModelContainer
+    var context: ModelContext { container.mainContext }
+
+    init() throws {
+        container = try PageStore.makeContainer(inMemory: true)
+    }
+
+    @Test func theTasksPickedAreDeletedAndTheRestKeepTheirOrder() throws {
+        let list = try #require(try context.addList(named: "life"))
+        let tasks = (1...6).compactMap { context.addTask("Task \($0)", to: list) }
+        try context.save()
+        #expect(context.deleteTasks([tasks[1].id, tasks[3].id, tasks[5].id], in: list) == 3)
+        try context.save()
+        #expect(list.liveTasks.map(\.text) == ["Task 1", "Task 3", "Task 5"])
+        #expect(try context.fetchCount(FetchDescriptor<TaskItem>()) == 3)
+        #expect(list.archive().isEmpty, "deleted is not done: nothing goes to the archive")
+    }
+
+    @Test func nothingPickedOrThingsThatAreGoneDeleteNothing() throws {
+        let list = try #require(try context.addList(named: "life"))
+        let task = try #require(context.addTask("Stays", to: list))
+        try context.save()
+        #expect(context.deleteTasks([], in: list) == 0)
+        #expect(context.deleteTasks([UUID(), UUID()], in: list) == 0)
+        try context.save()
+        #expect(list.liveTasks.map(\.id) == [task.id])
+    }
+
+    @Test func aPickMadeOnOnePageNeverReachesAnother() throws {
+        let life = try #require(try context.addList(named: "life"))
+        let work = try #require(try context.addList(named: "work"))
+        let mine = try #require(context.addTask("Mine", to: life))
+        let theirs = try #require(context.addTask("Theirs", to: work))
+        try context.save()
+        #expect(context.deleteTasks([mine.id, theirs.id], in: life) == 1)
+        try context.save()
+        #expect(life.liveCount == 0)
+        #expect(work.liveTasks.map(\.text) == ["Theirs"])
+    }
+
+    @Test func everyTaskOfAListCanBeDeletedAtOnceStruckOnesIncluded() throws {
+        let list = try #require(try context.addList(named: "life"))
+        let tasks = (0..<200).compactMap { context.addTask("Task \($0)", to: list) }
+        context.strike(tasks[0])
+        try context.save()
+        #expect(context.deleteTasks(Set(tasks.map(\.id)), in: list) == 200)
+        try context.save()
+        #expect((list.tasks ?? []).isEmpty)
+        #expect(try context.lists().count == 1, "the list itself stays")
+    }
+
+    @Test func whatWasDeletedTogetherIsSentToICloudAsGoneAndNotBroughtBack() throws {
+        let sync = CloudSync(storingIn: context)
+        let list = try #require(try context.addList(named: "life"))
+        let tasks = (1...3).compactMap { context.addTask("Task \($0)", to: list) }
+        try context.save()
+        let ids = tasks.map { CKRecord.ID(recordName: $0.id.uuidString, zoneID: list.zoneID) }
+        context.deleteTasks([tasks[0].id, tasks[1].id], in: list)
+        try context.save()
+        #expect(sync.record(for: ids[0]) == nil)
+        #expect(sync.record(for: ids[1]) == nil)
+        #expect(sync.record(for: ids[2]) != nil)
+    }
+}

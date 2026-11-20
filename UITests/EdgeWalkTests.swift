@@ -239,6 +239,82 @@ final class EdgeWalkTests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground)
     }
 
+    /// Several tasks picked out and deleted together. The app asks first,
+    /// and a tap on the empty paper lets them all go.
+    func testSeveralTasksArePickedAndDeletedTogether() {
+        skipTheFirstPage()
+        point(0.5, 0.5).tap()
+        for task in ["One\n", "Two\n", "Three\n", "Four"] {
+            type(task)
+            Thread.sleep(forTimeInterval: 1)
+        }
+        app.buttons["done"].tap()
+        XCTAssertTrue(app.buttons["Four"].waitForExistence(timeout: 3))
+        Thread.sleep(forTimeInterval: 0.8)
+
+        // Hold a task: Select picks it, and a tap on another picks that too.
+        app.buttons["Two"].coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["Select"].waitForExistence(timeout: 3), "the task menu offers picking several")
+        app.buttons["Select"].tap()
+        wait(for: "1 picked")
+        XCTAssertEqual(app.buttons["Two"].value as? String, "Picked")
+        XCTAssertEqual(app.buttons["One"].value as? String, "Not picked")
+        XCTAssertFalse(app.buttons["life"].exists, "the list names make way")
+        app.buttons["Four"].coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
+        wait(for: "2 picked")
+        XCTAssertFalse(app.keyboards.firstMatch.exists, "a tap picks, and does not edit")
+        // A second tap lets one go again.
+        app.buttons["Four"].coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
+        wait(for: "1 picked")
+        app.buttons["Four"].coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
+        wait(for: "2 picked")
+
+        // A drag across a task strikes nothing while tasks are picked.
+        let y = app.buttons["One"].frame.midY / app.frame.height
+        drag(from: (0.12, y), to: (0.9, y))
+        XCTAssertTrue(app.buttons["One"].exists)
+        XCTAssertEqual(app.buttons["One"].value as? String, "Not picked")
+
+        // Delete asks first, and Keep changes nothing.
+        app.buttons["Delete"].tap()
+        wait(for: "Delete 2?")
+        app.buttons["Keep"].tap()
+        wait(for: "2 picked")
+        for task in ["One", "Two", "Three", "Four"] { XCTAssertTrue(app.buttons[task].exists) }
+        app.buttons["Delete"].tap()
+        XCTAssertTrue(app.buttons["Yes, delete"].waitForExistence(timeout: 3))
+        app.buttons["Yes, delete"].tap()
+        XCTAssertTrue(gone(app.buttons["Two"]), "the picked tasks are deleted")
+        XCTAssertTrue(gone(app.buttons["Four"]))
+        XCTAssertTrue(app.buttons["One"].exists)
+        XCTAssertTrue(app.buttons["Three"].exists)
+        XCTAssertTrue(app.buttons["life"].waitForExistence(timeout: 3), "the list names are back")
+        XCTAssertEqual(app.buttons["life"].value as? String, "2 left")
+        XCTAssertLessThan(app.buttons["One"].frame.minY, app.buttons["Three"].frame.minY, "the rest keep their order")
+
+        // All picks every task. A tap on the empty paper lets them all go, and nothing is deleted.
+        app.buttons["One"].coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["Select"].waitForExistence(timeout: 3))
+        app.buttons["Select"].tap()
+        wait(for: "1 picked")
+        app.buttons["All"].tap()
+        wait(for: "2 picked")
+        XCTAssertFalse(app.buttons["All"].exists, "with every task picked there is no more to pick")
+        point(0.5, 0.6).tap()
+        XCTAssertTrue(app.buttons["life"].waitForExistence(timeout: 3), "a tap on the paper lets them go")
+        XCTAssertTrue(app.buttons["One"].exists)
+        XCTAssertTrue(app.buttons["Three"].exists)
+        XCTAssertNotEqual(app.buttons["One"].value as? String, "Picked")
+
+        // With one task left on the page there is nothing to pick several of.
+        drag(acrossLine: "Three")
+        XCTAssertTrue(gone(app.buttons["Three"]))
+        app.buttons["One"].coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["Delete"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Select"].exists)
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
     // MARK: Helpers
 
     private func skipTheFirstPage() {

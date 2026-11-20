@@ -22,6 +22,9 @@ struct TaskLines: View {
     /// The held line began to move: the menu makes way for the carrying.
     var closeMenu: (() -> Void)?
     var pendingStrikeID: Binding<UUID?> = .constant(nil)
+    /// The tasks picked out to be deleted together. Nothing while none are being picked.
+    var picked: Set<UUID>?
+    var pick: ((TaskItem) -> Void)?
 
     @Environment(\.modelContext) private var context
     @Environment(\.pageMetrics) private var metrics
@@ -67,10 +70,16 @@ struct TaskLines: View {
                 let isCarried = carried?.id == task.id
                 TaskLine(
                     task: task, focus: focus, editingID: $editingID, actions: actions,
-                    canStrike: carried == nil, showMenu: { openMenu?(task) },
+                    canStrike: carried == nil && picked == nil, showMenu: { openMenu?(task) },
                     menu: menuTaskID == task.id ? menuOptions : nil,
-                    pendingStrikeID: pendingStrikeID
+                    pendingStrikeID: pendingStrikeID,
+                    isPicked: picked.map { $0.contains(task.id) },
+                    pick: { pick?(task) }
                 )
+                    // While tasks are picked out, the ones picked stand in full
+                    // ink and the rest step back.
+                    .opacity(picked.map { $0.contains(task.id) ? 1 : 0.38 } ?? 1)
+                    .animation(.quick, value: picked)
                     // Behind a menu, every line but the one held recedes and cannot be touched.
                     .receded(menuTaskID != nil && menuTaskID != task.id)
                     .fadesUnderListNames()
@@ -88,7 +97,7 @@ struct TaskLines: View {
                     // text field keeps it from ever coming to rest.
                     .animation(isCarried || editingID == task.id ? nil : .shuffle, value: carried?.to)
                     .animation(editingID == task.id ? nil : .settle, value: isCarried)
-                    .onLiftDrag(isEnabled: task.isLive && editingID != task.id) {
+                    .onLiftDrag(isEnabled: task.isLive && editingID != task.id && picked == nil) {
                         pickUp(task, at: index)
                     } onChanged: { translation in
                         carry(by: translation.height)
@@ -96,7 +105,7 @@ struct TaskLines: View {
                         drop()
                     }
                     // A right click opens the menu a long press does.
-                    .onSecondaryClick { if task.isLive, carried == nil, menuTaskID == nil { openMenu?(task) } }
+                    .onSecondaryClick { if task.isLive, carried == nil, menuTaskID == nil, picked == nil { openMenu?(task) } }
                     .transition(.opacity)
             }
 
@@ -106,6 +115,7 @@ struct TaskLines: View {
                 .focused(focus, equals: .newTask)
                 .accessibilityLabel("New task")
                 .receded(menuTaskID != nil)
+                .disabled(picked != nil)
                 .fadesUnderListNames()
         }
         .coordinateSpace(.named(Self.space))

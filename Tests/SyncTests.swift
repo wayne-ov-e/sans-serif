@@ -563,3 +563,65 @@ struct OwnNameTests {
         #expect(CloudSync.tidied(pair.0) == pair.1)
     }
 }
+
+/// Build 21 stopped at every launch because the app asked an engine to send
+/// while it was already sending. Everything asked of the engines now takes turns.
+@MainActor
+@Suite("One at a time")
+struct OneAtATimeTests {
+    @Test func workAskedForAtTheSameTimeNeverOverlapsAndKeepsItsOrder() async {
+        let turn = OneAtATime()
+        let seen = Seen()
+        var asked: [Task<Void, Never>] = []
+        for number in 0..<40 {
+            asked.append(Task { @MainActor in
+                await turn.run {
+                    seen.running += 1
+                    seen.most = max(seen.most, seen.running)
+                    // Long enough for the others to pile up behind it.
+                    try? await Task.sleep(for: .milliseconds(number % 3 == 0 ? 8 : 1))
+                    seen.order.append(number)
+                    seen.running -= 1
+                }
+            })
+            // Each asks a moment after the last, as saves follow one another.
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        for one in asked { await one.value }
+        #expect(seen.most == 1, "two were in at once")
+        #expect(seen.order == Array(0..<40), "in the order they asked")
+        #expect(seen.running == 0)
+    }
+
+    @MainActor
+    private final class Seen {
+        var running = 0
+        var most = 0
+        var order: [Int] = []
+    }
+
+    @Test func theTurnIsFreeAgainAfterTheLastOneLeaves() async {
+        let turn = OneAtATime()
+        let first = await turn.run { 1 }
+        let second = await turn.run { 2 }
+        #expect(first + second == 3)
+        // And after a pile-up.
+        let one = Task { @MainActor in
+            await turn.run {
+                try? await Task.sleep(for: .milliseconds(5))
+                return "a"
+            }
+        }
+        let two = Task { @MainActor in await turn.run { "b" } }
+        let both = [await one.value, await two.value]
+        #expect(Set(both) == ["a", "b"])
+        #expect(await turn.run { "free" } == "free")
+    }
+
+    @Test func workInsideWorkOnAnotherGateDoesNotLockUp() async {
+        let outer = OneAtATime()
+        let inner = OneAtATime()
+        let result = await outer.run { await inner.run { "through" } }
+        #expect(result == "through")
+    }
+}

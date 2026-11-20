@@ -35,6 +35,10 @@ struct TaskLine: View {
     var menu: [MenuOption]?
     /// The task a keyboard shortcut has asked to strike, once it is back on the page as text.
     var pendingStrikeID: Binding<UUID?> = .constant(nil)
+    /// While tasks are being picked out, whether this one is. Then a tap
+    /// picks it or lets it go, and it is not edited, struck or carried.
+    var isPicked: Bool?
+    var pick: (() -> Void)?
 
     /// Longer text is cut with an ellipsis on the page and shown in full when editing.
     static let lineLimit = 3
@@ -97,7 +101,13 @@ struct TaskLine: View {
                     }
                 }
                 .contentShape(Rectangle())
-                .onTapGesture { if task.isLive, menu == nil { editingID = task.id } }
+                .onTapGesture {
+                    if isPicked != nil {
+                        pick?()
+                    } else if task.isLive, menu == nil {
+                        editingID = task.id
+                    }
+                }
                 // A drag that starts anywhere on the task's row strikes it.
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -118,9 +128,14 @@ struct TaskLine: View {
                 .haptic(.lift, trigger: undos)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(task.text)
-                .accessibilityValue(task.isLive ? (task.isCircled ? "Circled" : "") : "Struck")
+                .accessibilityValue(
+                    isPicked.map { $0 ? "Picked" : "Not picked" }
+                        ?? (task.isLive ? (task.isCircled ? "Circled" : "") : "Struck")
+                )
                 .accessibilityAddTraits(.isButton)
-                .accessibilityAction { if task.isLive { editingID = task.id } }
+                .accessibilityAction {
+                    if isPicked != nil { pick?() } else if task.isLive { editingID = task.id }
+                }
                 .accessibilityAction(named: task.isLive ? "Strike" : "Undo strike") {
                     task.isLive ? strikeWithoutDrag() : undo()
                 }

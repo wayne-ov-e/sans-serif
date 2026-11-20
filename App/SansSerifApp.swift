@@ -63,6 +63,26 @@ struct SansSerifApp: App {
             if syncs, !isTest { CloudSync.shared.start(context: context) }
             #if DEBUG
             // Tries the first step of sharing and says in the console how it went.
+            // Many changes a second for half a minute, with iCloud's development
+            // side listening: what stopped build 21 at every launch.
+            if syncs, arguments.contains("-stressSync"), let first = try context.lists().first {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(4))
+                    NSLog("SYNC stress: begins")
+                    var made: [TaskItem] = []
+                    for round in 0..<240 {
+                        if let task = context.addTask("stress \(round)", to: first) { made.append(task) }
+                        if round % 3 == 1, let task = made.dropLast().last { context.strike(task) }
+                        if round % 5 == 4, made.count > 6 { context.delete(made.removeFirst()) }
+                        if round % 7 == 0, let task = made.last { task.text += " edited" }
+                        if round % 40 == 0 { NSLog("SYNC stress: round \(round)") }
+                        try? await Task.sleep(for: .milliseconds(120))
+                    }
+                    for task in made { context.delete(task) }
+                    try? await Task.sleep(for: .seconds(8))
+                    NSLog("SYNC stress: done, running \(CloudSync.shared.isRunning)")
+                }
+            }
             if syncs, arguments.contains("-tryShare"), let first = try context.lists().first {
                 Task { @MainActor in
                     try? await Task.sleep(for: .seconds(6))

@@ -140,36 +140,58 @@ final class CloudSync {
 
     // MARK: Keeping up
 
-    private var sending: Task<Void, Never>?
+    /// Counts requests to send, so that only the latest goes ahead.
+    private var sendRequests = 0
     private var watching: Task<Void, Never>?
+    private var saving: Task<Void, Never>?
+    /// Every send and every fetch the app asks of the engines goes through
+    /// here, one at a time. An engine stops the app if it is asked to send
+    /// while it is already sending for the app: build 21, which saved and so
+    /// sent several times a second, stopped at every launch that way.
+    private let turn = OneAtATime()
+    /// How long a change may wait to be saved. Nothing is sent until the store
+    /// is saved, and left to itself the store saves when it finds a moment,
+    /// which can be many seconds.
+    static let saveInterval: Duration = .milliseconds(150)
 
     /// How often iCloud is asked for changes while the app is open. Changes
     /// are pushed to the app as well, but a push can take many seconds, and
     /// the system holds pushes back when there are many. With a shared list,
     /// someone else may be writing on it right now.
     static let watchInterval: (shared: Duration, alone: Duration) = (.seconds(1), .seconds(20))
-    /// How long a change may wait to be saved. Nothing is sent until the store
-    /// is saved, and left to itself the store saves when it finds a moment,
-    /// which can be many seconds: that wait was most of the delay before
-    /// someone else saw a task (Wayne, on build 20).
-    static let saveInterval: Duration = .milliseconds(150)
-    private var saving: Task<Void, Never>?
 
     /// Sends what is waiting, now. Left to itself the engine sends when the
     /// system finds a good moment, which can be several seconds away.
     private func sendSoon() {
         guard mine != nil else { return }
-        sending?.cancel()
-        sending = Task { @MainActor [weak self] in
+        // The latest request is the one that sends. An earlier one still
+        // waiting gives way to it. One already sending is left to finish:
+        // stopping it part way made iCloud drop everything it carried.
+        sendRequests += 1
+        let request = sendRequests
+        // Detached: a save can happen while an engine is telling the app of
+        // changes, and work started there must not carry the engine's own
+        // context with it into a call back to the engine.
+        Task.detached { [weak self] in
             // A moment, so that a run of changes goes out together.
             try? await Task.sleep(for: .milliseconds(100))
-            guard !Task.isCancelled, let self else { return }
+            await self?.sendWaiting(for: request)
+        }
+    }
+
+    /// Sends what each engine has waiting, when it is this send's turn.
+    private func sendWaiting(for request: Int) async {
+        guard request == sendRequests else { return }
+        await turn.run {
             for engine in [self.mine, self.theirs].compactMap({ $0 }) {
                 let state = engine.state
-                guard !state.pendingRecordZoneChanges.isEmpty || !state.pendingDatabaseChanges.isEmpty else { continue }
+                guard !state.pendingRecordZoneChanges.isEmpty || !state.pendingDatabaseChanges.isEmpty
+                else { continue }
                 try? await engine.sendChanges()
             }
         }
+        // Changes made while that was going out have had their own request
+        // give way to it, or are still waiting their moment: none is left behind.
     }
 
     /// While the app is open, iCloud is asked for changes every few seconds,
@@ -194,31 +216,14 @@ final class CloudSync {
                 guard let self else { return }
                 // A list shared by the user is in their own part of iCloud, and
                 // one shared with them is in the other: both are asked.
-                // Both at once: one after the other, the second waited for the first.
-                async let others = Self.asked(self.theirs)
-                async let own = Self.asked(self.mine)
-                let waits = await [others, own].compactMap { $0 }
-                var interval = self.lists().contains(where: \.isShared)
+                await self.turn.run {
+                    try? await self.theirs?.fetchChanges()
+                    try? await self.mine?.fetchChanges()
+                }
+                let interval = self.lists().contains(where: \.isShared)
                     ? Self.watchInterval.shared : Self.watchInterval.alone
-                // iCloud asked for a pause, or could not be reached: it is given
-                // one, and not asked again every second in the meantime.
-                if let longest = waits.max() { interval = max(interval, .seconds(longest)) }
                 try? await Task.sleep(for: interval)
             }
-        }
-    }
-
-    /// Asks one engine for changes. Gives back how long to wait before asking
-    /// again, in seconds, when iCloud says to or cannot be reached.
-    private static func asked(_ engine: CKSyncEngine?) async -> Double? {
-        guard let engine else { return nil }
-        do {
-            try await engine.fetchChanges()
-            return nil
-        } catch let error as CKError {
-            return error.retryAfterSeconds ?? 5
-        } catch {
-            return 5
         }
     }
 
@@ -479,6 +484,12 @@ final class CloudSync {
                 task(uuid)?.recordData = nil
             }
             engine.state.add(pendingRecordZoneChanges: [.saveRecord(id)])
+        case .batchRequestFailed, .operationCancelled:
+            // Nothing wrong with this change: it was sent together with one that
+            // iCloud refused, and went down with it. It is sent again. Left
+            // alone it would wait until the task was next changed, which on a
+            // shared list reads as the other person never getting it.
+            engine.state.add(pendingRecordZoneChanges: [.saveRecord(id)])
         default:
             // The network, a busy server, a full account: the engine tries again by itself.
             break
@@ -530,7 +541,7 @@ final class CloudSync {
         // on something else that is waiting, that is not a reason to give up:
         // what sharing itself needs is the list's zone, which is made sure of here.
         catchUp()
-        try? await mine.sendChanges()
+        await turn.run { try? await mine.sendChanges() }
         let zone = list.zoneID
         let database = container.privateCloudDatabase
         _ = try? await database.save(CKRecordZone(zoneID: zone))
@@ -608,7 +619,7 @@ final class CloudSync {
         do {
             let share = try await container.accept(metadata)
             noteName(from: share)
-            try await theirs?.fetchChanges()
+            await turn.run { try? await self.theirs?.fetchChanges() }
         } catch {
             // The invitation was withdrawn, or there is no network. Nothing is joined.
         }
@@ -719,5 +730,25 @@ struct SharePerson: Identifiable, Equatable {
         case (false, false, true): "invited"
         default: nil
         }
+    }
+}
+
+/// Lets one piece of work through at a time, in the order it was asked for.
+@MainActor
+final class OneAtATime {
+    private var isBusy = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    func run<Result>(_ work: () async -> Result) async -> Result {
+        if isBusy {
+            await withCheckedContinuation { waiting.append($0) }
+        } else {
+            isBusy = true
+        }
+        // The turn is handed straight to whoever is next, or given up.
+        defer {
+            if waiting.isEmpty { isBusy = false } else { waiting.removeFirst().resume() }
+        }
+        return await work()
     }
 }

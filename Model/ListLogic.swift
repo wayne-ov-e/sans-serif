@@ -135,6 +135,16 @@ extension ModelContext {
         task.struckBy = person
     }
 
+    /// Deletes several tasks of a list at once: the ones picked out on the
+    /// page. Only tasks of that list, so a choice made on one page can never
+    /// reach into another. Returns how many were deleted.
+    @discardableResult
+    func deleteTasks(_ ids: Set<UUID>, in list: TaskList) -> Int {
+        let chosen = (list.tasks ?? []).filter { ids.contains($0.id) }
+        for task in chosen { delete(task) }
+        return chosen.count
+    }
+
     /// Circles a live task, or clears its circle.
     func toggleCircle(_ task: TaskItem, at date: Date = .now) {
         guard task.isLive else { return }
