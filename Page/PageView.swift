@@ -570,12 +570,13 @@ struct PageView: View {
         else { return [] }
         if confirming {
             return [
-                MenuOption(title: "Yes, delete", isDestructive: true) {
+                // Someone else's list is left, not deleted: it stays theirs.
+                MenuOption(title: held.isSomeoneElses ? "Yes, leave" : "Yes, delete", isDestructive: true) {
                     menu = nil
                     removals += 1
                     context.delete(held)
                 },
-                MenuOption(title: "Keep") { menu = nil },
+                MenuOption(title: held.isSomeoneElses ? "Stay" : "Keep") { menu = nil },
             ]
         }
         var options = [MenuOption(title: "Rename") {
@@ -595,7 +596,7 @@ struct PageView: View {
         })
         // The last list cannot be deleted: there would be no page left.
         if lists.count > 1 {
-            options.append(MenuOption(title: "Delete list", isDestructive: true) {
+            options.append(MenuOption(title: held.isSomeoneElses ? "Leave list" : "Delete list", isDestructive: true) {
                 menu = .list(id, confirmingDelete: true)
             })
         }
@@ -612,9 +613,9 @@ struct PageView: View {
     /// On a shared list, who wrote the held task and who struck it.
     private var menuNote: String? {
         guard list.isShared, case .task(let id, _) = menu,
-              let task = (list.tasks ?? []).first(where: { $0.id == id }), let who = task.addedBy
+              let task = (list.tasks ?? []).first(where: { $0.id == id })
         else { return nil }
-        return "Added by \(who)"
+        return task.byLine
     }
 
     /// An hour or a name is being typed in the lines above the page.

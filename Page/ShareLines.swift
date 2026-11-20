@@ -31,19 +31,20 @@ struct ShareLines: View {
     @State private var isBusy = false
     @State private var isConfirmingStop = false
     @State private var copied = false
+    /// The person the owner has tapped, and is being asked about.
+    @State private var asking: SharePerson?
     /// People struck off and not yet gone from what iCloud says.
     @State private var struck: Set<String> = []
     @State private var changes = 0
     /// Counts the times the user has changed their name here.
     @State private var names = 0
+    /// What iCloud calls the user: the name they have until they write another.
+    @State private var iCloudName = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: metrics.settingsGap) {
-            Text(list.isSomeoneElses ? "Shared with you" : "Share \(list.name)")
-                .typeStyle(.monthLabel)
-                .foregroundStyle(.inkFaded)
-                .accessibilityAddTraits(.isHeader)
-
+            // No heading: the lines say what they are for, and less is better
+            // (Wayne, Nov 19, 2026).
             switch load {
             case .asking:
                 note("Asking iCloud")
@@ -54,8 +55,8 @@ struct ShareLines: View {
                 if let link {
                     shared(link: link, people: people)
                 } else {
-                    // Before there is a link, one thing to do and nothing else
-                    // (Wayne, Nov 19, 2026). The name and the rest come with the link.
+                    // Before there is a link: the user's own line, and one thing to do.
+                    OwnLine(fallback: iCloudName, note: "you")
                     word("Make a link") { Task { await makeLink() } }
                 }
             }
@@ -65,6 +66,8 @@ struct ShareLines: View {
         .animation(.quick, value: isBusy)
         .animation(.quick, value: load)
         .animation(.quick, value: isConfirmingStop)
+        .animation(.quick, value: asking)
+        .animation(.quick, value: iCloudName)
         .haptic(.pen, trigger: changes)
         .task(id: list.id) { await ask() }
         // The user's own line reads as they have just named themselves.
@@ -81,14 +84,37 @@ struct ShareLines: View {
     // MARK: Lines
 
     @ViewBuilder private func shared(link: URL, people: [SharePerson]) -> some View {
-        NameLine()
+        // The user's own line is where their name is changed: no line apart
+        // for it (Wayne, Nov 19, 2026).
+        if !people.contains(where: \.isMe) { OwnLine(fallback: iCloudName, note: "you") }
         ForEach(people) { person in
+            if person.isMe {
+                OwnLine(fallback: person.name, note: person.note)
+            } else {
             PersonLine(
                 person: person,
                 isStruck: struck.contains(person.id),
-                // Only the owner takes people off, and never themselves.
-                strike: list.isSomeoneElses || person.isOwner || person.isMe ? nil : { remove(person) }
+                // Only the owner takes people off, and never themselves. A tap
+                // asks first: taking someone off is not done by a slip of the finger.
+                strike: list.isSomeoneElses || person.isOwner || person.isMe ? nil : {
+                    asking = asking == person ? nil : person
+                }
             )
+            if asking == person {
+                HStack(alignment: .firstTextBaseline, spacing: metrics.listNameGap) {
+                    Button { asking = nil; remove(person) } label: {
+                        Text("Yes, remove").foregroundStyle(.inkRed)
+                    }
+                    Button { asking = nil } label: {
+                        Text("Keep").foregroundStyle(.ink)
+                    }
+                }
+                .buttonStyle(.plain)
+                .typeStyle(.action)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .transition(.opacity)
+            }
+            }
         }
         if !list.isSomeoneElses {
             if people.count < 2 { note("Anyone with the link can join and write.") }
@@ -142,12 +168,25 @@ struct ShareLines: View {
     ]
     #endif
 
+    #if DEBUG
+    /// The same list as the person it was shared with sees it.
+    private static let previewJoined = [
+        SharePerson(id: "ada", name: "Ada Lovelace", isOwner: true, isMe: false, isWaiting: false),
+        SharePerson(id: "me", name: "Wayne Xu", isOwner: false, isMe: true, isWaiting: false),
+        SharePerson(id: "ben", name: "ben@example.com", isOwner: false, isMe: false, isWaiting: true),
+    ]
+    #endif
+
     private func ask() async {
         #if DEBUG
         if Self.isPreview {
-            load = list.isShared
-                ? .known(link: URL(string: "https://www.icloud.com/share/preview"), people: Self.previewPeople)
-                : .known(link: nil, people: [])
+            iCloudName = "Wayne Xu"
+            let link = URL(string: "https://www.icloud.com/share/preview")
+            if list.isSomeoneElses {
+                load = .known(link: link, people: Self.previewJoined)
+            } else {
+                load = list.isShared ? .known(link: link, people: Self.previewPeople) : .known(link: nil, people: [])
+            }
             return
         }
         #endif
@@ -155,9 +194,15 @@ struct ShareLines: View {
             load = .failed("Turn on iCloud sync to share.")
             return
         }
-        // Not shared, as far as this device knows: nothing to ask iCloud yet.
+        // Not shared, as far as this device knows: nothing to ask iCloud yet,
+        // but what it calls the user.
         guard list.isShared || list.isSomeoneElses else {
+            iCloudName = CloudSync.shared.nameIsTyped ? "" : CloudSync.shared.myName ?? ""
             load = .known(link: nil, people: [])
+            if iCloudName.isEmpty {
+                await CloudSync.shared.learnName()
+                iCloudName = CloudSync.shared.nameIsTyped ? "" : CloudSync.shared.myName ?? ""
+            }
             return
         }
         if case .failed = load { load = .asking }
@@ -178,6 +223,18 @@ struct ShareLines: View {
     private func remove(_ person: SharePerson) {
         struck.insert(person.id)
         changes += 1
+        #if DEBUG
+        if Self.isPreview {
+            Task {
+                try? await Task.sleep(for: .seconds(0.8))
+                if case .known(let link, let people) = load {
+                    load = .known(link: link, people: people.filter { $0.id != person.id })
+                }
+                struck.remove(person.id)
+            }
+            return
+        }
+        #endif
         Task {
             // The pen line is seen before the name leaves.
             try? await Task.sleep(for: .seconds(0.6))
@@ -252,22 +309,30 @@ private extension EnvironmentValues {
     }
 }
 
-/// The name the user goes by on shared lists: "you are Wayne". It stands by
-/// the tasks they write and strike. A tap on it and it is typed where it
-/// stands. iCloud's name for them is there to begin with, when it gives one.
-private struct NameLine: View {
+/// The user's own line among the people on a list, and before there are any.
+/// It is where they say what they go by: a tap on the name and it is typed
+/// where it stands. The name stands by the tasks they write and strike.
+/// iCloud's name for them is there to begin with, when it gives one.
+private struct OwnLine: View {
+    /// What iCloud calls the user, shown until they write a name of their own.
+    let fallback: String
+    /// What stands after the name: "you", or "you, owner".
+    let note: String?
+
     @Environment(\.nameChanged) private var nameChanged
-    @State private var name = CloudSync.shared.myName ?? ""
+    @State private var typed = CloudSync.shared.nameIsTyped ? CloudSync.shared.myName ?? "" : ""
     @State private var isTyping = false
     @State private var draft = ""
     @FocusState private var isFocused: Bool
 
+    private var name: String { typed.isEmpty ? fallback : typed }
+
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text("you are").foregroundStyle(.inkFaded)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             if isTyping {
                 TextField("", text: $draft, prompt: Text("your name").foregroundStyle(.inkFaded))
                     .textFieldStyle(.plain)
+                    .typeStyle(.task)
                     .foregroundStyle(.ink)
                     .tint(.ink)
                     #if os(iOS)
@@ -276,7 +341,7 @@ private struct NameLine: View {
                     .submitLabel(.done)
                     #endif
                     .autocorrectionDisabled()
-                    .padding(.vertical, 6)
+                    .fixedSize()
                     .focused($isFocused)
                     .onSubmit(keep)
                     .onChange(of: isFocused) { _, focused in if !focused { keep() } }
@@ -286,11 +351,11 @@ private struct NameLine: View {
                     .accessibilityLabel("Your name")
             } else {
                 Text(name.isEmpty ? "add your name" : name)
+                    .typeStyle(.task)
                     .foregroundStyle(name.isEmpty ? .inkFaded : .ink)
                     .lineLimit(1)
                     // Pencil dots under a word that can be changed, as in settings.
                     .underline(pattern: .dot, color: .inkFaded)
-                    .padding(.vertical, 6)
                     .contentShape(Rectangle().inset(by: -6))
                     .onTapGesture {
                         draft = name
@@ -304,14 +369,14 @@ private struct NameLine: View {
                     .accessibilityAddTraits(.isButton)
                     .accessibilityHint("Tap to write the name others see by your tasks")
             }
+            if let note {
+                Text(note)
+                    .typeStyle(.monthLabel)
+                    .foregroundStyle(.inkFaded)
+                    .lineLimit(1)
+            }
         }
-        .typeStyle(.listName)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // iCloud may give a name a moment after the lines appear.
-        .task {
-            try? await Task.sleep(for: .seconds(1.5))
-            if !isTyping, name.isEmpty { name = CloudSync.shared.myName ?? "" }
-        }
     }
 
     private func keep() {
@@ -319,8 +384,10 @@ private struct NameLine: View {
         isTyping = false
         isFocused = false
         HourEntry.shared.isWritingElsewhere = false
-        CloudSync.shared.setName(draft)
-        name = CloudSync.shared.myName ?? ""
+        // Left as iCloud has it, nothing was written: iCloud's name goes on being used.
+        let written = CloudSync.tidied(draft)
+        CloudSync.shared.setName(written == fallback ? "" : written)
+        typed = CloudSync.shared.nameIsTyped ? CloudSync.shared.myName ?? "" : ""
         nameChanged()
     }
 }

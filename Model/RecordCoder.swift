@@ -81,6 +81,7 @@ enum RecordCoder {
         var struckBy: String?
         var addedBy: String?
         var circled: Date?
+        var editedBy: String? = nil
     }
 
     static func write(_ fields: TaskFields, to record: CKRecord) {
@@ -92,6 +93,9 @@ enum RecordCoder {
         record["struckBy"] = fields.struckBy
         record["addedBy"] = fields.addedBy
         record["circled"] = fields.circled
+        // Written only when it differs: a task nobody has edited never
+        // mentions the field, which iCloud learned later than the others.
+        if record["editedBy"] as? String != fields.editedBy { record["editedBy"] = fields.editedBy }
     }
 
     static func taskFields(of record: CKRecord) -> TaskFields {
@@ -103,7 +107,8 @@ enum RecordCoder {
             strokes: record["strokes"] as? Data,
             struckBy: record["struckBy"] as? String,
             addedBy: record["addedBy"] as? String,
-            circled: record["circled"] as? Date
+            circled: record["circled"] as? Date,
+            editedBy: record["editedBy"] as? String
         )
     }
 }
@@ -127,11 +132,19 @@ extension TaskList {
 }
 
 extension TaskItem {
+    /// On a shared list, who the task is by: whoever last changed its words,
+    /// when that was someone other than the person who wrote it.
+    var byLine: String? {
+        if let editedBy, !editedBy.isEmpty, editedBy != addedBy { return "Edited by \(editedBy)" }
+        if let addedBy, !addedBy.isEmpty { return "Added by \(addedBy)" }
+        return nil
+    }
+
     var fields: RecordCoder.TaskFields {
         get {
             RecordCoder.TaskFields(
                 text: text, order: order, created: createdDate, struck: struckDate, strokes: strokeData,
-                struckBy: struckBy, addedBy: addedBy, circled: circledDate
+                struckBy: struckBy, addedBy: addedBy, circled: circledDate, editedBy: editedBy
             )
         }
         set {
@@ -144,6 +157,7 @@ extension TaskItem {
             if struckBy != newValue.struckBy { struckBy = newValue.struckBy }
             if addedBy != newValue.addedBy { addedBy = newValue.addedBy }
             if circledDate != newValue.circled { circledDate = newValue.circled }
+            if editedBy != newValue.editedBy { editedBy = newValue.editedBy }
         }
     }
 }

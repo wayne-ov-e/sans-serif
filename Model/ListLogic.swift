@@ -125,6 +125,15 @@ extension ModelContext {
         return task
     }
 
+    /// Changes the words of a task. On a shared list, who changed them: the
+    /// page then says who edited it, not who first wrote it (Wayne, Nov 19, 2026).
+    func edit(_ task: TaskItem, to text: String, by person: String? = nil) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text != task.text else { return }
+        task.text = text
+        if task.list?.isShared == true, let person, !person.isEmpty { task.editedBy = person }
+    }
+
     /// Strikes a live task. The one-second hold before it leaves the page is the view's job.
     func strike(_ task: TaskItem, strokeData: Data? = nil, by person: String? = nil, at date: Date = .now) {
         guard task.isLive else { return }

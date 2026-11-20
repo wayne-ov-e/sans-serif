@@ -58,6 +58,8 @@ final class TaskItem {
     var recordData: Data?
     /// Who wrote the task, for shared lists. Empty for tasks written before lists could be shared.
     var addedBy: String?
+    /// Who last changed the task's words, for shared lists. Empty until they are changed.
+    var editedBy: String?
 
     var list: TaskList?
 

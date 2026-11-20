@@ -53,6 +53,7 @@ struct SansSerifApp: App {
                 task.strokeData = Stroke.encode(Stroke.generated(lines: 1, seed: 1))
                 task.struckBy = "schema"
                 task.addedBy = "schema"
+                task.editedBy = "schema"
                 task.circledDate = .now
                 try context.save()
             }
@@ -63,6 +64,13 @@ struct SansSerifApp: App {
             if syncs, !isTest { CloudSync.shared.start(context: context) }
             #if DEBUG
             // Tries the first step of sharing and says in the console how it went.
+            // With `-previewShare`, the last list is one someone else shared, to
+            // look at the other person's side of sharing without iCloud.
+            if arguments.contains("-previewShare"), let joined = try context.lists().last {
+                joined.zoneOwner = "_preview"
+                joined.isShared = true
+                for task in joined.tasks ?? [] { task.addedBy = "Ada" }
+            }
             // Many changes a second for half a minute, with iCloud's development
             // side listening: what stopped build 21 at every launch.
             if syncs, arguments.contains("-stressSync"), let first = try context.lists().first {

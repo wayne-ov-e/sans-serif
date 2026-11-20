@@ -631,8 +631,23 @@ final class CloudSync {
         list.shareURL = nil
     }
 
+    /// Asks iCloud what it calls the user, before any list is shared, so the
+    /// name is there to begin with and only changed by those who want another
+    /// (Wayne, Nov 19, 2026). Nothing is asked once a name is known or written.
+    func learnName() async {
+        guard isRunning, !nameIsTyped, myName?.isEmpty != false else { return }
+        guard let id = try? await container.userRecordID(),
+              let me = try? await container.shareParticipant(forUserRecordID: id)
+        else { return }
+        noteName(me.userIdentity.nameComponents)
+    }
+
     private func noteName(from share: CKShare) {
-        guard let components = share.currentUserParticipant?.userIdentity.nameComponents else { return }
+        noteName(share.currentUserParticipant?.userIdentity.nameComponents)
+    }
+
+    private func noteName(_ components: PersonNameComponents?) {
+        guard let components else { return }
         let name = PersonNameComponentsFormatter.localizedString(from: components, style: .short)
         // What the user wrote themselves stands.
         if !name.isEmpty, !nameIsTyped { myName = name }

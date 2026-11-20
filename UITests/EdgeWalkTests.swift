@@ -190,10 +190,20 @@ final class EdgeWalkTests: XCTestCase {
         app.buttons["life"].press(forDuration: 1)
         XCTAssertTrue(app.buttons["Share"].waitForExistence(timeout: 3), "the list menu offers sharing")
         app.buttons["Share"].tap()
-        wait(for: "Share life")
         wait(for: "Make a link")
+        XCTAssertFalse(first("Share life").exists, "there is no heading")
         XCTAssertFalse(first("Show counts").exists, "these are not the settings")
-        XCTAssertFalse(first("Your name").exists, "before there is a link there is one thing to do")
+        // The user's own line is there before there is a link, and is where
+        // their name is typed. There is no line apart for it.
+        XCTAssertFalse(first("you are").exists)
+        XCTAssertEqual(line("Your name").value as? String, "Wayne Xu", "iCloud's name is there to begin with")
+        line("Your name").tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        for _ in 0..<8 { app.typeText(XCUIKeyboardKey.delete.rawValue) }
+        type("Wayne\n")
+        wait(for: "Your name")
+        XCTAssertEqual(line("Your name").value as? String, "Wayne", "the name is kept")
+        Thread.sleep(forTimeInterval: 0.8)
 
         // A link is made, and the people on the list are named.
         line("Make a link").tap()
@@ -202,13 +212,9 @@ final class EdgeWalkTests: XCTestCase {
         XCTAssertEqual(app.buttons["ben@example.com"].value as? String, "invited")
         XCTAssertTrue(gone(first("Make a link")))
 
-        // The name the user goes by: typed where it stands, and kept.
-        XCTAssertEqual(line("Your name").value as? String, "Not set")
-        line("Your name").tap()
-        type("Wayne\n")
-        wait(for: "Your name")
+        // After the link the same name stands on the user's own line, among the people.
         XCTAssertEqual(line("Your name").value as? String, "Wayne", "the name is kept")
-        // Typed again and left blank, it is as if it had never been given.
+        // Typed again and left blank, the name iCloud gives is used again.
         line("Your name").tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         for _ in 0..<5 { app.typeText(XCUIKeyboardKey.delete.rawValue) }
@@ -216,11 +222,23 @@ final class EdgeWalkTests: XCTestCase {
         let dones = app.buttons.matching(identifier: "done").allElementsBoundByIndex
         dones.min { $0.frame.minY < $1.frame.minY }?.tap()
         wait(for: "Your name")
-        XCTAssertEqual(line("Your name").value as? String, "Not set", "a blank name is no name")
+        XCTAssertEqual(line("Your name").value as? String, "Wayne Xu", "a blank name gives way to iCloud's")
         Thread.sleep(forTimeInterval: 0.8)
 
         line("Copy link").tap()
         wait(for: "Copied")
+
+        // Taking a person off asks first. Keep changes nothing.
+        app.buttons["ben@example.com"].tap()
+        XCTAssertTrue(app.buttons["Yes, remove"].waitForExistence(timeout: 3), "a tap on a person asks first")
+        app.buttons["Keep"].tap()
+        XCTAssertTrue(gone(app.buttons["Yes, remove"]))
+        XCTAssertTrue(app.buttons["ben@example.com"].exists, "Keep leaves them on the list")
+        app.buttons["ben@example.com"].tap()
+        XCTAssertTrue(app.buttons["Yes, remove"].waitForExistence(timeout: 3))
+        app.buttons["Yes, remove"].tap()
+        XCTAssertTrue(gone(app.buttons["ben@example.com"]), "and Yes takes them off")
+        wait(for: "Ada Lovelace")
 
         // Stopping asks first, and Keep sharing changes nothing.
         line("Stop sharing").tap()
@@ -232,10 +250,30 @@ final class EdgeWalkTests: XCTestCase {
 
         // A tap on the page puts the lines away, and settings are settings again.
         point(0.5, 0.92).tap()
-        XCTAssertTrue(gone(first("Share life")), "a tap on the page puts sharing away")
+        XCTAssertTrue(gone(first("Send link")), "a tap on the page puts sharing away")
         drag(from: (0.5, 0.4), to: (0.5, 0.65))
         wait(for: "Show counts")
-        XCTAssertFalse(first("Share life").exists, "pulling down brings settings, not sharing")
+        XCTAssertFalse(first("Send link").exists, "pulling down brings settings, not sharing")
+        point(0.5, 0.92).tap()
+        XCTAssertTrue(gone(first("Show counts")))
+
+        // The other person's side: a list shared with them is left, not deleted.
+        app.buttons["home"].tap()
+        Thread.sleep(forTimeInterval: 1)
+        app.buttons["home"].press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Leave list"].waitForExistence(timeout: 3), "someone else's list is left")
+        XCTAssertFalse(app.buttons["Delete list"].exists)
+        app.buttons["Shared"].tap()
+        wait(for: "Leave list")
+        XCTAssertFalse(first("Stop sharing").exists, "only the owner stops sharing")
+        XCTAssertFalse(first("Send link").exists)
+        // They cannot take anyone off.
+        line("Ada Lovelace").tap()
+        XCTAssertFalse(app.buttons["Yes, remove"].exists)
+        line("Leave list").tap()
+        XCTAssertTrue(app.buttons["Yes, leave"].waitForExistence(timeout: 3), "leaving asks first")
+        app.buttons["Stay"].tap()
+        XCTAssertTrue(app.buttons["home"].waitForExistence(timeout: 3), "Stay keeps the list")
         XCTAssertEqual(app.state, .runningForeground)
     }
 

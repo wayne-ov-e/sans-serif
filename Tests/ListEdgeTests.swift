@@ -657,3 +657,82 @@ struct BulkDeleteTests {
         #expect(sync.record(for: ids[2]) != nil)
     }
 }
+
+@MainActor @Suite struct EditedBy {
+    let container: ModelContainer
+    init() throws { container = try PageStore.makeContainer(inMemory: true) }
+
+    private func page() throws -> (ModelContext, TaskList, TaskList) {
+        let context = container.mainContext
+        let own = try #require(try context.addList(named: "mine"))
+        let shared = try #require(try context.addList(named: "ours"))
+        shared.isShared = true
+        return (context, own, shared)
+    }
+
+    @Test func someoneElsesEditIsSaidInPlaceOfWhoAdded() throws {
+        let (context, _, shared) = try page()
+        let task = try #require(context.addTask("Bins", to: shared, by: "Ada"))
+        #expect(task.byLine == "Added by Ada")
+        context.edit(task, to: "Bins and bottles", by: "Ben")
+        #expect(task.text == "Bins and bottles")
+        #expect(task.addedBy == "Ada")
+        #expect(task.byLine == "Edited by Ben")
+    }
+
+    @Test func editingOnesOwnTaskStillSaysAdded() throws {
+        let (context, _, shared) = try page()
+        let task = try #require(context.addTask("Bins", to: shared, by: "Ada"))
+        context.edit(task, to: "Bottles", by: "Ada")
+        #expect(task.byLine == "Added by Ada")
+    }
+
+    @Test func theLastEditorIsTheOneNamed() throws {
+        let (context, _, shared) = try page()
+        let task = try #require(context.addTask("Bins", to: shared, by: "Ada"))
+        context.edit(task, to: "Bottles", by: "Ben")
+        context.edit(task, to: "Boxes", by: "Cy")
+        #expect(task.byLine == "Edited by Cy")
+        context.edit(task, to: "Bins", by: "Ada")
+        #expect(task.byLine == "Added by Ada")
+    }
+
+    @Test func nothingChangedNamesNobody() throws {
+        let (context, own, shared) = try page()
+        let task = try #require(context.addTask("Bins", to: shared, by: "Ada"))
+        context.edit(task, to: " Bins ", by: "Ben")
+        context.edit(task, to: "   ", by: "Ben")
+        #expect(task.text == "Bins")
+        #expect(task.editedBy == nil)
+        // Without a name, the words change and nobody is named.
+        context.edit(task, to: "Bottles")
+        #expect(task.text == "Bottles")
+        #expect(task.byLine == "Added by Ada")
+        // The user's own lists go unsigned.
+        let mine = try #require(context.addTask("Mine", to: own, by: "Ada"))
+        context.edit(mine, to: "Still mine", by: "Ada")
+        #expect(mine.editedBy == nil)
+        #expect(mine.byLine == nil)
+    }
+
+    @Test func aTaskWithNoWriterKnownStillSaysWhoEdited() throws {
+        let (context, _, shared) = try page()
+        let task = try #require(context.addTask("Old", to: shared))
+        context.edit(task, to: "New", by: "Ben")
+        #expect(task.byLine == "Edited by Ben")
+    }
+
+    @Test func theEditorGoesToICloudAndBackAndUneditedTasksLeaveTheFieldAlone() throws {
+        let id = CKRecord.ID(recordName: UUID().uuidString, zoneID: RecordCoder.zoneID(for: UUID(), owner: nil))
+        let record = CKRecord(recordType: RecordCoder.taskType, recordID: id)
+        var fields = RecordCoder.TaskFields(
+            text: "Bins", order: 1, created: .now, struck: nil, strokes: nil, struckBy: nil, addedBy: "Ada", circled: nil
+        )
+        RecordCoder.write(fields, to: record)
+        #expect(record.changedKeys().contains("editedBy") == false)
+        fields.editedBy = "Ben"
+        RecordCoder.write(fields, to: record)
+        #expect(record.changedKeys().contains("editedBy"))
+        #expect(RecordCoder.taskFields(of: record).editedBy == "Ben")
+    }
+}

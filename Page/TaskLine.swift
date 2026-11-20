@@ -155,7 +155,7 @@ struct TaskLine: View {
         if edited.isEmpty {
             context.delete(task)
         } else if edited != task.text {
-            task.text = edited
+            context.edit(task, to: edited, by: CloudSync.shared.myName)
         }
     }
 
