@@ -20,10 +20,28 @@ struct PageSnapshot: Codable, Equatable, Sendable {
         var lines: [Line]
         /// How many tasks are live, the ones not shown included.
         var left: Int
+        /// Repeats that wait for their day. A widget is drawn without the
+        /// app, so it is told now what will be on the page tomorrow and after.
+        var waiting: [Waiting]?
 
         /// Lines to show in a place with room for `count`.
         func lines(_ count: Int) -> [Line] { Array(lines.prefix(count)) }
         var next: Line? { lines.first(where: \.isLive) }
+    }
+
+    /// A copy of a repeat whose day has not come.
+    struct Waiting: Codable, Hashable, Sendable {
+        var line: Line
+        /// The day it is due, as "2026-11-20".
+        var due: String
+        /// How many of the list's lines stand above it on the page.
+        var before: Int
+    }
+
+    /// A day as it is kept: "2026-11-20".
+    static func day(_ date: Date, calendar: Calendar = .current) -> String {
+        let parts = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
 
     var lists: [List] = []
@@ -48,6 +66,34 @@ struct PageSnapshot: Codable, Equatable, Sendable {
 }
 
 extension PageSnapshot.List {
+    /// The list with the repeats whose day has come by `date` on the page,
+    /// each where it was.
+    func arriving(at date: Date, calendar: Calendar = .current) -> PageSnapshot.List {
+        guard let waiting, !waiting.isEmpty else { return self }
+        let today = PageSnapshot.day(date, calendar: calendar)
+        let due = waiting.filter { $0.due <= today }
+        guard !due.isEmpty else { return self }
+        var list = self
+        // From the bottom up, so that each place still means what it did.
+        for arrival in due.sorted(by: { $0.before > $1.before }) where !list.lines.contains(where: { $0.id == arrival.line.id }) {
+            list.lines.insert(arrival.line, at: min(max(arrival.before, 0), list.lines.count))
+            list.left += 1
+        }
+        list.waiting = waiting.filter { $0.due > today }
+        return list
+    }
+
+    /// The first moments of the days on which a repeat arrives, after `now`.
+    func arrivals(after now: Date, calendar: Calendar = .current) -> [Date] {
+        let today = PageSnapshot.day(now, calendar: calendar)
+        let days = Set((waiting ?? []).map(\.due).filter { $0 > today }).sorted().prefix(7)
+        return days.compactMap { day in
+            let parts = day.split(separator: "-").compactMap { Int($0) }
+            guard parts.count == 3 else { return nil }
+            return calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
+        }
+    }
+
     /// The list without the lines struck before `date`: they have left for the archive.
     func leaving(struckBefore date: Date) -> PageSnapshot.List {
         var list = self
@@ -70,6 +116,13 @@ extension PageSnapshot.List {
 }
 
 extension PageSnapshot {
+    /// The snapshot with the repeats whose day has come by `date` on the page.
+    func arriving(at date: Date, calendar: Calendar = .current) -> PageSnapshot {
+        var snapshot = self
+        snapshot.lists = lists.map { $0.arriving(at: date, calendar: calendar) }
+        return snapshot
+    }
+
     /// The snapshot without the lines struck before `date`.
     func leaving(struckBefore date: Date) -> PageSnapshot {
         var snapshot = self
@@ -172,7 +225,7 @@ struct SharedPage: @unchecked Sendable {
     /// The lists as the widgets show them from `now`: first as they are, then
     /// once more each time a struck line leaves.
     func timeline(at now: Date = .now) -> (snapshot: PageSnapshot, leaving: [UUID: Date]) {
-        let snapshot = snapshot
+        let snapshot = snapshot.arriving(at: now)
         let known = leaving
         let leaving = snapshot.leaving(known: known, at: now)
         if leaving != known { self.leaving = leaving }
@@ -189,7 +242,8 @@ struct SharedPage: @unchecked Sendable {
     /// changes nothing when that has been done already. It must not undo it.
     @discardableResult
     func toggle(task: UUID, expectingLive: Bool? = nil, at date: Date = .now) -> Bool {
-        var snapshot = snapshot
+        // A repeat that arrived today without the app is a line like any other.
+        var snapshot = snapshot.arriving(at: date)
         for list in snapshot.lists.indices {
             guard let line = snapshot.lists[list].lines.firstIndex(where: { $0.id == task }) else { continue }
             let strikes = snapshot.lists[list].lines[line].isLive

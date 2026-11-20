@@ -355,6 +355,97 @@ final class EdgeWalkTests: XCTestCase {
 
     // MARK: Helpers
 
+    /// A held task is made to repeat: daily, on days of the week, on a day of
+    /// the month. It says so, a struck repeat leaves the page and does not
+    /// come straight back, and Never ends it.
+    func testATaskIsMadeToRepeatAndStruck() {
+        skipTheFirstPage()
+        point(0.5, 0.5).tap()
+        for task in ["Vitamins\n", "Rent\n", "Fig tree"] {
+            type(task)
+            Thread.sleep(forTimeInterval: 1)
+        }
+        app.buttons["done"].tap()
+        XCTAssertTrue(app.buttons["Fig tree"].waitForExistence(timeout: 3))
+        Thread.sleep(forTimeInterval: 0.8)
+        let held = CGVector(dx: 0.08, dy: 0.5)
+
+        // Daily: one tap, and the row is put away.
+        app.buttons["Vitamins"].coordinate(withNormalizedOffset: held).press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["Repeat"].waitForExistence(timeout: 3), "the task menu offers a repeat")
+        XCTAssertLessThan(
+            app.buttons["Delete"].frame.minX, app.frame.width - 24, "Delete still shows at the edge, beside it"
+        )
+        app.buttons["Repeat"].tap()
+        XCTAssertTrue(app.buttons["Daily"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Never"].exists, "nothing to end on a task that does not repeat")
+        app.buttons["Daily"].tap()
+        XCTAssertTrue(app.buttons["life"].waitForExistence(timeout: 3), "the list names are back")
+        XCTAssertEqual(app.buttons["Vitamins"].value as? String, "Repeats daily")
+        XCTAssertEqual(app.buttons["Rent"].value as? String ?? "", "", "the others are as they were")
+
+        // Weekly: today is chosen already, another day is added and taken away again.
+        let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        let today = names[Calendar.current.component(.weekday, from: .now) - 1]
+        let other = today == "Mon" ? "Tue" : "Mon"
+        let both = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].filter { $0 == today || $0 == other }
+        app.buttons["Fig tree"].coordinate(withNormalizedOffset: held).press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["Repeat"].waitForExistence(timeout: 3))
+        app.buttons["Repeat"].tap()
+        XCTAssertTrue(app.buttons["Weekly"].waitForExistence(timeout: 3))
+        app.buttons["Weekly"].tap()
+        XCTAssertTrue(app.buttons[other].waitForExistence(timeout: 3), "the days of the week are offered")
+        XCTAssertEqual(app.buttons["Fig tree"].value as? String, "Repeats \(today)", "today, until another is chosen")
+        app.buttons[other].tap()
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertEqual(app.buttons["Fig tree"].value as? String, "Repeats " + both.joined(separator: ", "))
+        app.buttons[other].tap()
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertEqual(app.buttons["Fig tree"].value as? String, "Repeats \(today)")
+        // A tap on the page puts the row away, and the days are kept.
+        point(0.5, 0.6).tap()
+        XCTAssertTrue(app.buttons["life"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.buttons["Fig tree"].value as? String, "Repeats \(today)")
+
+        // Monthly: the row opens on today, and the day beside it is chosen.
+        let date = Calendar.current.component(.day, from: .now)
+        let day = date > 1 ? date - 1 : 2
+        let ending = (11...13).contains(day % 100) ? "th" : day % 10 == 1 ? "st" : day % 10 == 2 ? "nd" : day % 10 == 3 ? "rd" : "th"
+        app.buttons["Rent"].coordinate(withNormalizedOffset: held).press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["Repeat"].waitForExistence(timeout: 3))
+        app.buttons["Repeat"].tap()
+        XCTAssertTrue(app.buttons["Monthly"].waitForExistence(timeout: 3))
+        app.buttons["Monthly"].tap()
+        XCTAssertTrue(app.buttons["\(date)"].waitForExistence(timeout: 3))
+        Thread.sleep(forTimeInterval: 1.2)
+        let todayX = app.buttons["\(date)"].frame.midX
+        XCTAssertTrue(
+            todayX > app.frame.width * 0.25 && todayX < app.frame.width * 0.75,
+            "the row has slid to today, near the middle: \(todayX) of \(app.frame.width)"
+        )
+        app.buttons["\(day)"].tap()
+        XCTAssertTrue(app.buttons["life"].waitForExistence(timeout: 3), "a day chosen puts the row away")
+        XCTAssertEqual(app.buttons["Rent"].value as? String, "Repeats on the \(day)\(ending)")
+
+        // Struck, a repeat leaves the page like any other task, and does not come back today.
+        XCTAssertEqual(app.buttons["life"].value as? String, "3 left")
+        drag(acrossLine: "Vitamins")
+        XCTAssertTrue(gone(app.buttons["Vitamins"]), "a struck repeat leaves the page")
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertFalse(app.buttons["Vitamins"].exists, "and waits for tomorrow")
+        XCTAssertEqual(app.buttons["life"].value as? String, "2 left", "the copy that waits is not counted")
+
+        // Never ends a repeat.
+        app.buttons["Rent"].coordinate(withNormalizedOffset: held).press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["Repeat"].waitForExistence(timeout: 3))
+        app.buttons["Repeat"].tap()
+        XCTAssertTrue(app.buttons["Never"].waitForExistence(timeout: 3), "a task that repeats can be told not to")
+        app.buttons["Never"].tap()
+        XCTAssertTrue(app.buttons["life"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.buttons["Rent"].value as? String ?? "", "")
+        XCTAssertEqual(app.buttons["Fig tree"].value as? String, "Repeats \(today)", "the other repeat is untouched")
+    }
+
     private func skipTheFirstPage() {
         XCTAssertTrue(app.buttons["skip"].waitForExistence(timeout: 6))
         app.buttons["skip"].tap()

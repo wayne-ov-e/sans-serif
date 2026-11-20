@@ -306,3 +306,43 @@ struct RepeatTests {
         #expect(page.lists.first?.left == 1)
     }
 }
+
+/// The widgets are drawn without the app: a repeat arrives there on its day.
+@MainActor
+struct RepeatWidgetTests {
+    let calendar = Calendar.current
+
+    @Test func aWaitingRepeatArrivesInTheWidgetOnItsDayWhereItWas() throws {
+        let container = try PageStore.makeContainer(inMemory: true)
+        let context = container.mainContext
+        let list = try #require(try context.addList(named: "life"))
+        context.addTask("Call the framer", to: list)
+        let task = try #require(context.addTask("Take vitamins", to: list))
+        context.addTask("Write to Grandma", to: list)
+        context.setRepeat(Repeat(.day), on: task)
+        let now = Date.now
+        context.strike(task, at: now.addingTimeInterval(-600))
+
+        let page = try #require(try context.pageSnapshot(current: list.id, at: now).lists.first)
+        #expect(page.lines.map(\.text) == ["Call the framer", "Write to Grandma"])
+        #expect(page.waiting?.count == 1)
+        // Today nothing arrives.
+        #expect(page.arriving(at: now) == page)
+
+        let tomorrow = try #require(calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)))
+        #expect(page.arrivals(after: now) == [tomorrow])
+        let then = page.arriving(at: tomorrow)
+        #expect(then.lines.map(\.text) == ["Call the framer", "Take vitamins", "Write to Grandma"])
+        #expect(then.left == 3)
+        #expect(then.waiting?.isEmpty == true)
+        // Asked twice, it is there once.
+        #expect(then.arriving(at: tomorrow).lines.count == 3)
+    }
+
+    @Test func aSnapshotFromAnOlderBuildStillReads() throws {
+        let old = #"{"lists":[{"id":"00000000-0000-0000-0000-000000000001","name":"life","lines":[],"left":0}]}"#
+        let page = try JSONDecoder().decode(PageSnapshot.self, from: Data(old.utf8))
+        #expect(page.lists.first?.waiting == nil)
+        #expect(page.arriving(at: .now) == page)
+    }
+}

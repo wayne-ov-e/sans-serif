@@ -69,8 +69,11 @@ struct ListProvider: AppIntentTimelineProvider {
         // leave a moment later. Counting from the strike itself did not work:
         // the system draws a widget again some seconds after a tap, and by
         // then the moment was over and the line was gone without being seen.
-        let leaves = Set(list.lines.compactMap { page.leaving[$0.id] }.filter { $0 > now }).sorted()
-        let entries = ([now] + leaves).map { ListEntry(date: $0, list: list.shown(at: $0, leaving: page.leaving)) }
+        let leaves = Set(list.lines.compactMap { page.leaving[$0.id] }.filter { $0 > now })
+        // And once more at the start of each day a repeat comes back, so it
+        // is there that morning without the app being opened.
+        let moments = ([now] + leaves.union(list.arrivals(after: now)).sorted())
+        let entries = moments.map { ListEntry(date: $0, list: list.arriving(at: $0).shown(at: $0, leaving: page.leaving)) }
         // The app and a tap on a task ask for a new timeline. Nothing else changes it.
         return Timeline(entries: entries, policy: .never)
     }

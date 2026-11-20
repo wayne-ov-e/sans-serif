@@ -143,8 +143,7 @@ struct Repeat: Equatable, Sendable {
     /// A day as it is kept: "2026-11-20". A day of the calendar and not a
     /// moment, so that it begins for each person when their own day does.
     static func day(_ date: Date, calendar: Calendar = .current) -> String {
-        let parts = calendar.dateComponents([.year, .month, .day], from: date)
-        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+        PageSnapshot.day(date, calendar: calendar)
     }
 
     /// The identity of the copy of a repeat that is due on a day. Worked out,

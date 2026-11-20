@@ -23,11 +23,22 @@ extension ModelContext {
                     if task.isLive { live += 1 }
                     return live <= PageSnapshot.linesPerList
                 }
+                // Repeats that wait for their day, and where each will stand
+                // when it comes: below the lines that are above it on the page.
+                let circled = lines.count(where: \.isCircled)
+                let waiting = tasks.filter { $0.isWaiting(at: now) }.map { task in
+                    PageSnapshot.Waiting(
+                        line: PageSnapshot.Line(id: task.id, text: task.text, struck: nil),
+                        due: task.dueDay ?? "",
+                        before: circled + lines.count { !$0.isCircled && TaskItem.inPageOrder($0, task) }
+                    )
+                }
                 return PageSnapshot.List(
                     id: list.id,
                     name: list.name,
                     lines: lines.map { PageSnapshot.Line(id: $0.id, text: $0.text, struck: $0.struckDate) },
-                    left: tasks.count { $0.isLive && !$0.isWaiting(at: now) }
+                    left: tasks.count { $0.isLive && !$0.isWaiting(at: now) },
+                    waiting: waiting.isEmpty ? nil : waiting
                 )
             },
             current: current
@@ -61,6 +72,7 @@ final class PageMirror {
     private var context: ModelContext?
     private var page = SharedPage.shared
     private var observer: (any NSObjectProtocol)?
+    private var dayObserver: (any NSObjectProtocol)?
     /// The list open in the app. The Live Activity shows this one.
     var current: UUID? {
         didSet { if current != oldValue { refresh() } }
@@ -72,6 +84,12 @@ final class PageMirror {
         OutsideChanges.handler = { [weak self] in await self?.outsideChange() }
         observer = NotificationCenter.default.addObserver(
             forName: ModelContext.didSave, object: nil, queue: .main
+        ) { _ in
+            Task { @MainActor in PageMirror.shared.refresh() }
+        }
+        // A new day, with the app running: what waited for it is on the page.
+        dayObserver = NotificationCenter.default.addObserver(
+            forName: .NSCalendarDayChanged, object: nil, queue: .main
         ) { _ in
             Task { @MainActor in PageMirror.shared.refresh() }
         }

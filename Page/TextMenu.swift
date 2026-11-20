@@ -125,12 +125,17 @@ private struct RowThatScrolls: ViewModifier {
                     // getting there is not the hand's doing, so it is not felt.
                     opened = false
                     Task { @MainActor in
-                        // Once the new words have their places.
-                        try? await Task.sleep(for: .milliseconds(40))
-                        if let showing {
-                            reader.scrollTo(showing, anchor: .center)
-                        } else {
-                            reader.scrollTo(Self.start, anchor: .leading)
+                        // Once the new words have their places, and once more
+                        // when the row has finished changing: asked only the
+                        // first time, a slow phone left the row short of the
+                        // day chosen (found by the walk, Nov 20, 2026).
+                        for wait in [40, 220] {
+                            try? await Task.sleep(for: .milliseconds(wait))
+                            if let showing {
+                                reader.scrollTo(showing, anchor: .center)
+                            } else {
+                                reader.scrollTo(Self.start, anchor: .leading)
+                            }
                         }
                         try? await Task.sleep(for: .milliseconds(250))
                         opened = true
