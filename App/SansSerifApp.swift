@@ -57,6 +57,9 @@ struct SansSerifApp: App {
                 task.struckBy = "schema"
                 task.addedBy = "schema"
                 task.editedBy = "schema"
+                task.repeats = "daily"
+                task.dueDay = "2026-01-01"
+                task.series = "schema"
                 task.circledDate = .now
                 try context.save()
             }

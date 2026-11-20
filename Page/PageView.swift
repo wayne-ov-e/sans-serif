@@ -87,6 +87,10 @@ struct PageView: View {
     @State private var shareOpens = 0
     /// The menu that is open, if any.
     @State private var menu: PageMenu?
+    /// The held task's menu is asking when it repeats, and how far it has got.
+    @State private var repeatStep: RepeatStep?
+    /// Counted when the day changes, so that a repeat whose day has come is on the page.
+    @State private var days = 0
     /// Tasks picked out to be deleted together. Nothing while none are being picked.
     @State private var picked: Set<UUID>?
     /// The question before the picked tasks are deleted is showing.
@@ -150,7 +154,11 @@ struct PageView: View {
         // The archive and settings, coming and going, are felt the same way.
         .sheetHaptics(showsArchive, quietly: turnPutsSheetsAway)
         // The question about deleting what is done is asked afresh for each menu.
-        .onChange(of: menu) { _, _ in isConfirmingDone = false }
+        .onChange(of: menu) { _, _ in
+            isConfirmingDone = false
+            repeatStep = nil
+        }
+        .modifier(DayWatch(days: $days))
         // A line put down: whatever was struck meanwhile may leave now.
         .onChange(of: isLifting) { _, lifting in if !lifting { restartHold() } }
         // The task or list a menu was open on has gone, from here or another device.
@@ -269,8 +277,10 @@ struct PageView: View {
             // A task is held: what can be done with it stands where the list names were.
             MenuRow(
                 options: taskMenuOptions,
-                label: moving ? "Move to" : doneQuestion,
-                note: moving || isConfirmingDone ? nil : menuNote
+                label: moving ? "Move to" : repeatStep?.label ?? doneQuestion,
+                note: moving || isConfirmingDone || repeatStep != nil ? nil : menuNote,
+                ticks: repeatStep?.isDays ?? false,
+                showing: repeatShowing
             )
         } else if keyboardIsUp, renamingID == nil, !isNamingList {
             // While writing, the list names make way for a way to stop.
@@ -302,6 +312,7 @@ struct PageView: View {
         // The row of words changes with a short fade. Only the row: an
         // animation laid over the whole page reaches the text fields too.
         .animation(.quick, value: menu?.taskID)
+        .animation(.quick, value: repeatStep)
         .animation(.quick, value: notice)
         .animation(.quick, value: picked != nil)
         .animation(.quick, value: isConfirmingPicked)
@@ -317,8 +328,10 @@ struct PageView: View {
 
     /// Live tasks, and struck ones that have not left yet, in page order.
     private var tasksOnPage: [TaskItem] {
-        (list.tasks ?? [])
-            .filter { $0.isLive || held[$0.id] != nil }
+        // Read so that the page is looked at again when the day changes.
+        _ = days
+        return (list.tasks ?? [])
+            .filter { $0.isOnPage || held[$0.id] != nil }
             .sorted(by: TaskItem.inPageOrder)
     }
 
@@ -629,6 +642,7 @@ struct PageView: View {
             }
         }
         if !task.isLive { return doneOptions(task) }
+        if let repeatStep { return repeatOptions(task, at: repeatStep) }
         // No Edit: a tap on the task already edits it.
         var options: [MenuOption] = []
         if lists.count > 1 {
@@ -640,7 +654,7 @@ struct PageView: View {
             copy(task.text)
         })
         // Several at once: this one is picked, and a tap on each of the others picks it too.
-        if (list.tasks ?? []).count(where: \.isLive) > 1 {
+        if (list.tasks ?? []).count(where: \.isOnPage) > 1 {
             options.append(MenuOption(title: "Select") {
                 menu = nil
                 focus = nil
@@ -652,13 +666,111 @@ struct PageView: View {
             menu = nil
             context.toggleCircle(task)
         })
+        // When it comes back after it is struck.
+        options.append(MenuOption(title: "Repeat") { repeatStep = .rule })
         // No confirmation: deleting a task is undone with a shake or Cmd+Z.
         options.append(MenuOption(title: "Delete", isDestructive: true) {
             menu = nil
             removals += 1
-            withAnimation(reduceMotion ? nil : .shuffle) { context.delete(task) }
+            withAnimation(reduceMotion ? nil : .shuffle) {
+                context.endRepeat(of: task)
+                context.delete(task)
+            }
         })
         return options
+    }
+
+    /// When a task repeats, asked a step at a time in the same row: how often,
+    /// then which day. A rule tapped is kept at once, with today as its day,
+    /// so the row can be left at any step.
+    private func repeatOptions(_ task: TaskItem, at step: RepeatStep) -> [MenuOption] {
+        let calendar = Calendar.current
+        let today = calendar.dateComponents([.month, .day, .weekday], from: .now)
+        let rule = task.rule?.every
+        func keep(_ every: Repeat.Every) {
+            Tap.word()
+            context.setRepeat(Repeat(every), on: task)
+        }
+        switch step {
+        case .rule:
+            var options = [
+                MenuOption(title: "Daily") {
+                    keep(.day)
+                    menu = nil
+                },
+                MenuOption(title: "Weekly") {
+                    if case .week = rule {} else { keep(.week([today.weekday ?? 2])) }
+                    repeatStep = .week
+                },
+                MenuOption(title: "Monthly") {
+                    if case .month = rule {} else { keep(.month(today.day ?? 1)) }
+                    repeatStep = .month
+                },
+                MenuOption(title: "Yearly") {
+                    if case .year = rule {} else { keep(.year(month: today.month ?? 1, day: today.day ?? 1)) }
+                    repeatStep = .yearMonth
+                },
+            ]
+            if task.repeats != nil {
+                options.append(MenuOption(title: "Never") {
+                    Tap.word()
+                    context.setRepeat(nil, on: task)
+                    menu = nil
+                })
+            }
+            return options
+        case .week:
+            var chosen: Set<Int> = []
+            if case .week(let days) = rule { chosen = days }
+            return Repeat.weekOrder.map { day in
+                MenuOption(title: Repeat.weekdayNames[day - 1], isFaded: !chosen.contains(day)) {
+                    // Several days can be chosen. The last one cannot be given up.
+                    var days = chosen
+                    if days.contains(day) { days.remove(day) } else { days.insert(day) }
+                    if !days.isEmpty { keep(.week(days)) }
+                }
+            }
+        case .month:
+            var chosen = 0
+            if case .month(let day) = rule { chosen = day }
+            return (Array(1...31) + [Repeat.lastDay]).map { day in
+                MenuOption(title: day == Repeat.lastDay ? "Last" : "\(day)", isFaded: day != chosen) {
+                    keep(.month(day))
+                    menu = nil
+                }
+            }
+        case .yearMonth:
+            var chosen = 0
+            if case .year(let month, _) = rule { chosen = month }
+            return (1...12).map { month in
+                MenuOption(title: Repeat.monthNames[month - 1], isFaded: month != chosen) {
+                    Tap.word()
+                    repeatStep = .yearDay(month)
+                }
+            }
+        case .yearDay(let month):
+            var chosen = 0
+            if case .year(month, let day) = rule { chosen = day }
+            return (1...Repeat.days(in: month)).map { day in
+                MenuOption(title: "\(day)", isFaded: day != chosen) {
+                    keep(.year(month: month, day: day))
+                    menu = nil
+                }
+            }
+        }
+    }
+
+    /// The word a row of days opens on: the day already chosen.
+    private var repeatShowing: String? {
+        guard let repeatStep, case .task(let id, _) = menu,
+              let rule = (list.tasks ?? []).first(where: { $0.id == id })?.rule?.every
+        else { return nil }
+        switch (repeatStep, rule) {
+        case (.month, .month(let day)): return day == Repeat.lastDay ? "Last" : "\(day)"
+        case (.yearMonth, .year(let month, _)): return Repeat.monthNames[month - 1]
+        case (.yearDay(let shown), .year(let month, let day)) where shown == month: return "\(day)"
+        default: return nil
+        }
     }
 
     /// A struck task held in the archive: put it back, copy it, delete it, or
@@ -754,7 +866,10 @@ struct PageView: View {
         if picked != live {
             options.append(MenuOption(title: "All") { self.picked = live })
         }
-        options.append(MenuOption(title: "done") { stopPicking() })
+        options.append(MenuOption(title: "done") {
+            Tap.word()
+            stopPicking()
+        })
         return options
     }
 
@@ -1064,5 +1179,46 @@ struct PageView: View {
         return lines.reduce(false) { added, line in
             context.addTask(String(line), to: list, by: CloudSync.shared.myName) != nil || added
         }
+    }
+}
+
+/// The steps of asking when a held task repeats.
+enum RepeatStep: Equatable {
+    /// How often.
+    case rule
+    /// Which days of the week.
+    case week
+    /// Which day of the month.
+    case month
+    /// Which month of the year, and then which day of it.
+    case yearMonth
+    case yearDay(Int)
+
+    /// What the row of words is for, said before them.
+    var label: String {
+        switch self {
+        case .rule: "Repeat"
+        case .week, .yearMonth: "Every"
+        case .month: "On the"
+        case .yearDay(let month): Repeat.monthNames[month - 1]
+        }
+    }
+
+    /// A row of days, felt as it slides.
+    var isDays: Bool { self != .rule }
+}
+
+/// A repeat that waited for today is on the page when today begins, and when
+/// the app is come back to: `days` is counted up, and the page looks again.
+private struct DayWatch: ViewModifier {
+    @Binding var days: Int
+    @Environment(\.scenePhase) private var scenePhase
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)) { _ in
+                days += 1
+            }
+            .onChange(of: scenePhase) { _, phase in if phase == .active { days += 1 } }
     }
 }

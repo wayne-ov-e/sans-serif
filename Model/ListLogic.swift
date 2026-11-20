@@ -35,12 +35,12 @@ extension TaskList {
 extension TaskList {
     /// Tasks on the page, in page order.
     var liveTasks: [TaskItem] {
-        (tasks ?? []).filter(\.isLive).sorted(by: TaskItem.inPageOrder)
+        (tasks ?? []).filter(\.isOnPage).sorted(by: TaskItem.inPageOrder)
     }
 
     /// The count beside the list name: tasks left.
     var liveCount: Int {
-        (tasks ?? []).count(where: \.isLive)
+        (tasks ?? []).count(where: \.isOnPage)
     }
 
     /// What was struck today, most recently struck first. The archive shows it
@@ -156,6 +156,8 @@ extension ModelContext {
         task.circledDate = nil
         task.strokeData = strokeData
         task.struckBy = person
+        // One that repeats comes back on its next day.
+        makeNext(after: task, at: date)
     }
 
     /// Deletes several tasks of a list at once: the ones picked out on the
@@ -164,7 +166,10 @@ extension ModelContext {
     @discardableResult
     func deleteTasks(_ ids: Set<UUID>, in list: TaskList) -> Int {
         let chosen = (list.tasks ?? []).filter { ids.contains($0.id) }
-        for task in chosen { delete(task) }
+        for task in chosen {
+            endRepeat(of: task)
+            delete(task)
+        }
         return chosen.count
     }
 
@@ -179,6 +184,7 @@ extension ModelContext {
         task.struckDate = nil
         task.strokeData = nil
         task.struckBy = nil
+        settleRepeat(restored: task)
     }
 
     /// Moves a task to the bottom of another list.

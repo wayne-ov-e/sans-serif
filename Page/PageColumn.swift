@@ -229,7 +229,22 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
                         if wantsArchive { archiveShown = true }
                     }
                 } else {
-                    archiveShown = false
+                    // Put away by a turn to another list: that list's page is
+                    // simply there, under the one that slid in. Brought down
+                    // from above like a page coming back from its own archive,
+                    // it was still pale and on its way when the cover came off,
+                    // and the text blinked (Wayne, Nov 20, 2026). Being told
+                    // here, a moment later, the turn's own stillness is lost.
+                    // A turn is known by the row of pages, covered or away
+                    // from its place: the page's own name changes a moment
+                    // after the archive is told to go.
+                    if stripCovers || turn != 0, !reduceMotion {
+                        var still = Transaction()
+                        still.disablesAnimations = true
+                        withTransaction(still) { archiveShown = false }
+                    } else {
+                        archiveShown = false
+                    }
                     Task { @MainActor in
                         try? await Task.sleep(for: .milliseconds(700))
                         if !wantsArchive { archiveMounted = false }

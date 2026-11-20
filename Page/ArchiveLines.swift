@@ -78,7 +78,7 @@ struct ArchiveLines: View {
         // Behind a menu, every line but the one held recedes, as on the page.
         .receded(menuTaskID != nil && menuTaskID != task.id)
         .fadesUnderListNames()
-        .onLongPressGesture(minimumDuration: Lift.holdDuration) { if menuTaskID == nil { openMenu(task) } }
+        .onHold { if menuTaskID == nil { openMenu(task) } }
         .onSecondaryClick { if menuTaskID == nil { openMenu(task) } }
         .transition(.opacity)
     }

@@ -82,6 +82,9 @@ enum RecordCoder {
         var addedBy: String?
         var circled: Date?
         var editedBy: String? = nil
+        var repeats: String? = nil
+        var due: String? = nil
+        var series: String? = nil
     }
 
     static func write(_ fields: TaskFields, to record: CKRecord) {
@@ -96,6 +99,10 @@ enum RecordCoder {
         // Written only when it differs: a task nobody has edited never
         // mentions the field, which iCloud learned later than the others.
         if record["editedBy"] as? String != fields.editedBy { record["editedBy"] = fields.editedBy }
+        // The same for a repeat: a task that does not repeat never mentions these.
+        if record["repeats"] as? String != fields.repeats { record["repeats"] = fields.repeats }
+        if record["due"] as? String != fields.due { record["due"] = fields.due }
+        if record["series"] as? String != fields.series { record["series"] = fields.series }
     }
 
     static func taskFields(of record: CKRecord) -> TaskFields {
@@ -108,7 +115,10 @@ enum RecordCoder {
             struckBy: record["struckBy"] as? String,
             addedBy: record["addedBy"] as? String,
             circled: record["circled"] as? Date,
-            editedBy: record["editedBy"] as? String
+            editedBy: record["editedBy"] as? String,
+            repeats: record["repeats"] as? String,
+            due: record["due"] as? String,
+            series: record["series"] as? String
         )
     }
 }
@@ -144,7 +154,8 @@ extension TaskItem {
         get {
             RecordCoder.TaskFields(
                 text: text, order: order, created: createdDate, struck: struckDate, strokes: strokeData,
-                struckBy: struckBy, addedBy: addedBy, circled: circledDate, editedBy: editedBy
+                struckBy: struckBy, addedBy: addedBy, circled: circledDate, editedBy: editedBy,
+                repeats: repeats, due: dueDay, series: series
             )
         }
         set {
@@ -158,6 +169,9 @@ extension TaskItem {
             if addedBy != newValue.addedBy { addedBy = newValue.addedBy }
             if circledDate != newValue.circled { circledDate = newValue.circled }
             if editedBy != newValue.editedBy { editedBy = newValue.editedBy }
+            if repeats != newValue.repeats { repeats = newValue.repeats }
+            if dueDay != newValue.due { dueDay = newValue.due }
+            if series != newValue.series { series = newValue.series }
         }
     }
 }

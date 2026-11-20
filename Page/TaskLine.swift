@@ -46,6 +46,7 @@ struct TaskLine: View {
     static let secondsPerLine = 0.16
 
     @Environment(\.modelContext) private var context
+    @Environment(\.pageMetrics) private var metrics
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var undos = 0
     /// The pen's way across the line, felt as it goes.
@@ -88,7 +89,7 @@ struct TaskLine: View {
                 // Whatever ends the edit, the text is kept.
                 .onDisappear(perform: commitEdit)
         } else {
-            Text(task.text)
+            words
                 .typeStyle(.task)
                 .foregroundStyle(task.isLive ? .ink : .inkFaded)
                 .lineLimit(Self.lineLimit)
@@ -128,10 +129,7 @@ struct TaskLine: View {
                 .haptic(.lift, trigger: undos)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(task.text)
-                .accessibilityValue(
-                    isPicked.map { $0 ? "Picked" : "Not picked" }
-                        ?? (task.isLive ? (task.isCircled ? "Circled" : "") : "Struck")
-                )
+                .accessibilityValue(spokenState)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction {
                     if isPicked != nil { pick?() } else if task.isLive { editingID = task.id }
@@ -144,6 +142,25 @@ struct TaskLine: View {
         }
     }
 
+    private var spokenState: String {
+        if let isPicked { return isPicked ? "Picked" : "Not picked" }
+        guard task.isLive else { return "Struck" }
+        let parts: [String?] = [task.isCircled ? "Circled" : nil, task.rule?.spoken]
+        return parts.compactMap { $0 }.joined(separator: ", ")
+    }
+
+    /// The task's words. One that repeats says so after them, in a small
+    /// faint word raised like the count beside a list name: "daily", "mon wed
+    /// fri", "1st". Part of the same text, so it wraps with the words.
+    private var words: Text {
+        guard task.isLive, let mark = task.rule?.mark else { return Text(task.text) }
+        let small = Text(mark)
+            .font(.system(size: metrics.countSize, design: .serif))
+            .baselineOffset(metrics.taskSize * 0.36)
+            .foregroundStyle(.inkFaded)
+        return Text("\(Text(task.text))  \(small)")
+    }
+
     // MARK: Editing
 
     /// Keeps the edit. A task emptied of its text is removed.
@@ -153,6 +170,7 @@ struct TaskLine: View {
             .split(whereSeparator: \.isNewline).joined(separator: " ")
             .trimmingCharacters(in: .whitespaces)
         if edited.isEmpty {
+            context.endRepeat(of: task)
             context.delete(task)
         } else if edited != task.text {
             context.edit(task, to: edited, by: CloudSync.shared.myName)

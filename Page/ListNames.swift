@@ -60,7 +60,7 @@ struct ListNames: View {
                     .frame(minWidth: metrics.minTouchHeight, maxWidth: .infinity)
                     .frame(height: metrics.minTouchHeight)
                     .contentShape(Rectangle())
-                    .onLongPressGesture(minimumDuration: Lift.holdDuration + 0.15) {
+                    .onHold(after: Lift.holdDuration + 0.15) {
                         if menuListID == nil, renamingID == nil { isNamingList.wrappedValue = true }
                     }
                     .accessibilityHidden(true)
@@ -111,7 +111,7 @@ struct ListNames: View {
         // The gap on either side of a name belongs to it, so short names are easy to hit.
         .contentShape(Rectangle().inset(by: -metrics.listNameGap / 2))
         .onTapGesture { select(list) }
-        .onLongPressGesture(minimumDuration: Lift.holdDuration) { openMenu?(list) }
+        .onHold { openMenu?(list) }
         .onSecondaryClick { openMenu?(list) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(list.name)

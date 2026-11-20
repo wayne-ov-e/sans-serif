@@ -491,6 +491,8 @@ final class CloudSync {
             // Two devices each made life, work and home before they met. Folding
             // them together is a change of ours, and goes out like any other.
             _ = try? context?.mergeDuplicateDefaultLists()
+            // And a repeat is left with one copy still to be done, no more and no fewer.
+            _ = context?.tidyRepeats()
             try? context?.save()
         case .sentRecordZoneChanges(let sent):
             applying {

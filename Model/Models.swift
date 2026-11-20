@@ -64,6 +64,14 @@ final class TaskItem {
     var addedBy: String?
     /// Who last changed the task's words, for shared lists. Empty until they are changed.
     var editedBy: String?
+    /// When the task comes back after it is struck: "daily", "weekly:2,4,6",
+    /// "monthly:20", "yearly:11-20". Empty for a task that does not repeat. See `Repeat`.
+    var repeats: String?
+    /// The day this copy of a repeat is due, as "2026-11-20". Until then it
+    /// waits, unseen. Empty for a task that is simply there.
+    var dueDay: String?
+    /// What every copy of one repeat has in common.
+    var series: String?
 
     var list: TaskList?
 

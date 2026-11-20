@@ -11,7 +11,11 @@ struct BottomWord: View {
     @Environment(\.pageMetrics) private var metrics
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            // Felt as it is pressed (Wayne, Nov 20, 2026).
+            Tap.word()
+            action()
+        } label: {
             Text(word)
                 // A size below the list names: these are things to do, not places to go.
                 .typeStyle(isFaded ? .monthLabel : .action)

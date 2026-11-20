@@ -5,6 +5,8 @@ struct MenuOption: Identifiable {
     let title: String
     /// Delete actions are in red ink.
     var isDestructive = false
+    /// One of several that is not the one chosen: a day of the week not picked.
+    var isFaded = false
     let action: () -> Void
 
     var id: String { title }
@@ -44,6 +46,10 @@ struct MenuRow: View {
     var label: String?
     /// A line above the row: on a shared list, who wrote the task.
     var note: String?
+    /// A row of days: sliding it is felt, a tick for each day that goes by.
+    var ticks = false
+    /// The word the row opens on, slid into view: the day already chosen.
+    var showing: String?
 
     @Environment(\.pageMetrics) private var metrics
 
@@ -59,7 +65,10 @@ struct MenuRow: View {
     }
 
     private var row: some View {
-        HStack(alignment: .firstTextBaseline, spacing: metrics.listNameGap) {
+        // Six words are wider than a phone. Set a little closer, the last of
+        // them shows at the edge and says the row goes on.
+        let gap = label == nil && options.count > 5 ? metrics.listNameGap * 0.75 : metrics.listNameGap
+        return HStack(alignment: .firstTextBaseline, spacing: gap) {
             if let label {
                 Text(label)
                     .typeStyle(.monthLabel)
@@ -70,28 +79,67 @@ struct MenuRow: View {
                 Button(action: option.action) {
                     Text(option.title)
                         .typeStyle(.action)
-                        .foregroundStyle(option.isDestructive ? .inkRed : .ink)
+                        .foregroundStyle(option.isDestructive ? .inkRed : option.isFaded ? .inkFaded : .ink)
                         .frame(minHeight: metrics.minTouchHeight)
                         // The gap on either side of a word belongs to it.
-                        .contentShape(Rectangle().inset(by: -metrics.listNameGap / 2))
+                        .contentShape(Rectangle().inset(by: -gap / 2))
                 }
                 .buttonStyle(.plain)
+                .accessibilityAddTraits(ticks && !option.isFaded ? .isSelected : [])
+                .id(option.id)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Where a new row of words begins, for one that was slid along.
+        .background(alignment: .leading) { Color.clear.frame(width: 1, height: 1).id(RowThatScrolls.start) }
         .transition(.opacity)
         // On a narrow page a long row slides sideways. One that fits does not move.
-        .modifier(RowThatScrolls())
+        .modifier(RowThatScrolls(ticks: ticks, showing: showing, label: label))
     }
 }
 
 private struct RowThatScrolls: ViewModifier {
+    var ticks = false
+    var showing: String?
+    var label: String?
+
+    static let start = "row start"
+
+    /// About one short word and the gap after it.
+    private static let tick: CGFloat = 44
+
     func body(content: Content) -> some View {
-        ScrollView(.horizontal) { content }
-            .scrollIndicators(.hidden)
-            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-            .scrollClipDisabled()
+        ScrollViewReader { reader in
+            ScrollView(.horizontal) { content }
+                .scrollIndicators(.hidden)
+                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+                .scrollClipDisabled()
+                // Each day that slides by is felt (Wayne, Nov 20, 2026).
+                .onScrollGeometryChange(for: Int.self) { geometry in
+                    Int((geometry.contentOffset.x / Self.tick).rounded(.down))
+                } action: { old, new in
+                    if ticks, old != new, opened { Tap.step() }
+                }
+                .onChange(of: label, initial: true) {
+                    // A new row of words: it opens on the one chosen, and
+                    // getting there is not the hand's doing, so it is not felt.
+                    opened = false
+                    Task { @MainActor in
+                        // Once the new words have their places.
+                        try? await Task.sleep(for: .milliseconds(40))
+                        if let showing {
+                            reader.scrollTo(showing, anchor: .center)
+                        } else {
+                            reader.scrollTo(Self.start, anchor: .leading)
+                        }
+                        try? await Task.sleep(for: .milliseconds(250))
+                        opened = true
+                    }
+                }
+        }
     }
+
+    @State private var opened = false
 }
 
 /// What a menu is open on.

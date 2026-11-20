@@ -1,4 +1,25 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
+
+/// A haptic played at once, for a word that is gone the moment it is pressed:
+/// "done" leaves with the keyboard, and a view that has left cannot be felt.
+@MainActor
+enum Tap {
+    /// A word pressed.
+    static func word() { play(intensity: 0.8) }
+    /// One more step along a row of days sliding by.
+    static func step() { play(intensity: 0.5) }
+
+    private static func play(intensity: CGFloat) {
+        let setting = Setting.haptics
+        guard UserDefaults.standard.object(forKey: setting.key) as? Bool ?? setting.defaultValue else { return }
+        #if os(iOS)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: intensity)
+        #endif
+    }
+}
 
 extension View {
     /// Plays a haptic when `trigger` changes, unless Haptics is struck in settings.

@@ -10,7 +10,8 @@ extension ModelContext {
             lists: try lists().map { list in
                 let tasks = (list.tasks ?? []).sorted(by: TaskItem.inPageOrder)
                 let shown = tasks.filter { task in
-                    guard let struck = task.struckDate else { return true }
+                    // A repeat that waits for its day is not on the page yet.
+                    guard let struck = task.struckDate else { return !task.isWaiting(at: now) }
                     return now.timeIntervalSince(struck) < PageSnapshot.keep
                 }
                 // Circled tasks come first, in the order they were circled. The rest keep page order.
@@ -26,7 +27,7 @@ extension ModelContext {
                     id: list.id,
                     name: list.name,
                     lines: lines.map { PageSnapshot.Line(id: $0.id, text: $0.text, struck: $0.struckDate) },
-                    left: tasks.count(where: \.isLive)
+                    left: tasks.count { $0.isLive && !$0.isWaiting(at: now) }
                 )
             },
             current: current

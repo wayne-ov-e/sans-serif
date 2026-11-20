@@ -9,7 +9,7 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "24"
+    CURRENT_PROJECT_VERSION: "25"
 targets:
   SansSerif:
     type: application
@@ -35,6 +35,9 @@ targets:
         UILaunchScreen:
           UIColorName: Paper
         UIApplicationSupportsIndirectInputEvents: true
+        # iPhone holds an app's own animations to 60 frames a second without
+        # this. With it, turns and sheets run at the screen's full 120.
+        CADisableMinimumFrameDurationOnPhone: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft

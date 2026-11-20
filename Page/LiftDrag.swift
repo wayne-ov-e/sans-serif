@@ -16,6 +16,17 @@ extension View {
         modifier(LiftDragModifier(isEnabled: isEnabled, onBegan: onBegan, onChanged: onChanged, onEnded: onEnded))
         #endif
     }
+
+    /// A hold that is known while the finger is still down: what it opens is
+    /// there the moment the time is up, never only once the finger lifts
+    /// (Wayne, Nov 20, 2026).
+    func onHold(after seconds: Double = Lift.holdDuration, perform: @escaping () -> Void) -> some View {
+        #if os(iOS)
+        gesture(LiftPress(isEnabled: true, seconds: seconds, onBegan: perform, onChanged: { _ in }, onEnded: {}))
+        #else
+        onLongPressGesture(minimumDuration: seconds, perform: perform)
+        #endif
+    }
 }
 
 /// How long a line is held before it lifts.
@@ -28,6 +39,7 @@ enum Lift {
 /// Being a UIKit recognizer, it leaves the page free to scroll until it begins.
 private struct LiftPress: UIGestureRecognizerRepresentable {
     let isEnabled: Bool
+    var seconds = Lift.holdDuration
     let onBegan: () -> Void
     let onChanged: (CGSize) -> Void
     let onEnded: () -> Void
@@ -38,7 +50,7 @@ private struct LiftPress: UIGestureRecognizerRepresentable {
 
     func makeUIGestureRecognizer(context: Context) -> UILongPressGestureRecognizer {
         let recognizer = UILongPressGestureRecognizer()
-        recognizer.minimumPressDuration = Lift.holdDuration
+        recognizer.minimumPressDuration = seconds
         recognizer.isEnabled = isEnabled
         return recognizer
     }
