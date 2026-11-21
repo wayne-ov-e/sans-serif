@@ -343,6 +343,67 @@ struct PullTrackerTests {
         #expect(!nothingToLetGo)
     }
 
+    #if os(iOS)
+    @Test func onlyAPhoneAsWideAsAnOpenDuoIsTurned() {
+        // The widest ordinary iPhone, either way up.
+        #expect(!AppDelegate.turns(phoneScreen: CGSize(width: 440, height: 956)))
+        #expect(!AppDelegate.turns(phoneScreen: CGSize(width: 956, height: 440)))
+        #expect(!AppDelegate.turns(phoneScreen: CGSize(width: 402, height: 874)))
+        // An inner screen, wider than any of them.
+        #expect(AppDelegate.turns(phoneScreen: CGSize(width: 700, height: 900)))
+    }
+    #endif
+
+    @Test func aPullLetGoPastTheEdgeIsFollowedBackToIt() {
+        var tracker = PullTracker(edge: .top)
+        tracker.began(past: 0, offset: -62)
+        // Nothing has counted yet: the scrolling brings it back by itself.
+        _ = tracker.changed(past: 10, offset: -72)
+        let early = tracker.rebounds()
+        #expect(!early)
+        let counted = tracker.changed(past: 61, offset: -123)
+        #expect(counted)
+        _ = tracker.held()
+        _ = tracker.released()
+        let rebounds = tracker.rebounds()
+        #expect(rebounds)
+        let first = tracker.rebounded()
+        #expect(first == 61)
+        _ = tracker.changed(past: 30, offset: -92)
+        let halfway = tracker.rebounded()
+        #expect(halfway == 30)
+        // What is taken off the paper is the distance before it was rounded.
+        _ = tracker.changed(past: 12, offset: -74)
+        let exact = tracker.rebounded(exactly: 12.4)
+        #expect(exact == 12.4)
+        // Back at its edge: told once, and then no more.
+        _ = tracker.changed(past: 0, offset: -62)
+        let back = tracker.rebounded(exactly: 0.3)
+        #expect(back == 0)
+        let after = tracker.rebounded()
+        #expect(after == nil)
+
+        // Away from the top a sheet is only scrolled, and does not come back.
+        var away = PullTracker(edge: .awayFromTop)
+        away.began(past: 0, offset: -62)
+        _ = away.changed(past: 30, offset: -32)
+        _ = away.released()
+        let scrolled = away.rebounds()
+        #expect(!scrolled)
+
+        // Up past the end is a shift up, and a finger coming down again ends it.
+        var up = PullTracker(edge: .bottom)
+        up.began(past: 0, offset: 0)
+        _ = up.changed(past: 45, offset: 45)
+        _ = up.released()
+        let upRebounds = up.rebounds()
+        #expect(upRebounds)
+        let shift = up.rebounded()
+        #expect(shift == -45)
+        up.began(past: 20, offset: 20)
+        #expect(!up.isRebounding)
+    }
+
     @Test func aFingerLiftedWhileThePaperIsHeldLetsItDown() {
         var tracker = PullTracker(edge: .bottom)
         tracker.began(past: 0, offset: 0)

@@ -39,6 +39,15 @@ final class WalkthroughTests: XCTestCase {
         XCTAssertTrue(app.buttons["Circle"].waitForExistence(timeout: 3), "the menu offers a circle")
         app.buttons["Circle"].tap()
 
+        // Hold me, and make me repeat: Repeat, then how often.
+        wait(for: "Hold me to repeat.")
+        line("Hold me to repeat.").press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Repeat"].waitForExistence(timeout: 3), "the menu offers a repeat")
+        XCTAssertTrue(app.buttons["Select"].exists, "the menu has the page's own words")
+        app.buttons["Repeat"].tap()
+        XCTAssertTrue(app.buttons["Daily"].waitForExistence(timeout: 3), "Repeat asks how often")
+        app.buttons["Daily"].tap()
+
         // Swipe along the bottom for the next list: the page turns to it, and back.
         wait(for: "Swipe along the bottom for the next list.")
         XCTAssertTrue(app.buttons["work"].waitForExistence(timeout: 3), "the list names show during the swipe")

@@ -441,13 +441,18 @@ struct PageView: View {
         heading = target
         turns += 1
         let token = turns
-        if target !== list {
+        // A sheet the turn puts away says nothing of its own: the turn is felt
+        // already. Only when there is a sheet to put away, and only until it
+        // is away. This used to be said on every turn and held for 1.2 s, so a
+        // sheet pulled up or down just after a turn was not felt at all
+        // (Wayne, Nov 21, 2026).
+        if target !== list, showsArchive || showsSettings {
             // Counted apart from the turns: a later turn back to the open
             // page starts no quiet of its own, and must not keep this one.
             quiets += 1
             let quiet = quiets
             turnPutsSheetsAway = true
-            // Until the turn has landed and the sheets are away, and a little longer.
+            // In case the turn never lands: it is not left quiet for good.
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(1.2))
                 if quiet == quiets { turnPutsSheetsAway = false }
@@ -468,6 +473,7 @@ struct PageView: View {
                 stripCovers = false
                 heading = nil
             }
+            Task { @MainActor in turnPutsSheetsAway = false }
             return
         }
         // How far there is to go: from where the row is, if it is already moving.
@@ -496,6 +502,7 @@ struct PageView: View {
             guard !returns else {
                 isTurning = false
                 heading = nil
+                turnPutsSheetsAway = false
                 return
             }
             Task { @MainActor in
@@ -516,6 +523,8 @@ struct PageView: View {
                     stripCovers = false
                     heading = nil
                 }
+                // The sheets are away: the next one pulled is felt again.
+                turnPutsSheetsAway = false
             }
         }
     }
@@ -535,7 +544,8 @@ struct PageView: View {
             isTurning = false
             stripCovers = false
             heading = nil
-        }
+        }        // A moment later, once the sheets have heard they are away.
+        Task { @MainActor in turnPutsSheetsAway = false }
     }
 
     /// A sideways drag along the bottom of the page moves the row of pages

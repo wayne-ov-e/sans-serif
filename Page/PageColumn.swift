@@ -1,4 +1,5 @@
 import SwiftUI
+import QuartzCore
 
 /// The sheet of paper: a single column of text on the paper background.
 ///
@@ -79,6 +80,20 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
     /// Where the paper is held while the scrolling lets go of it for a moment
     /// under the finger. Nothing, almost always. See `PullTracker.held`.
     @State private var held: CGFloat = 0
+    /// How far the scrolling still has each sheet past its edge after a pull
+    /// was let go, taken off again so that only `held` moves the paper. See
+    /// `rebound`.
+    @State private var pageCountered: CGFloat = 0
+    @State private var archiveCountered: CGFloat = 0
+    /// How far the paper was pulled when it was let go, and when that was.
+    @State private var pageReboundFrom: Rebound?
+    @State private var archiveReboundFrom: Rebound?
+
+    /// A pull let go: how far the paper was past its edge, and when.
+    private struct Rebound: Equatable {
+        let shift: CGFloat
+        let at: CFTimeInterval
+    }
     /// Counts the times the page was asked to follow its end, so that only the last is carried out.
     @State private var followings = 0
 
@@ -123,14 +138,15 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
                                     )
                                 content.receded(showsHeader || contentReceded)
                             },
-                            metrics: metrics, footerZone: footerZone, minHeight: minHeight, handsOver: true
+                            metrics: metrics, footerZone: footerZone, minHeight: minHeight, handsOver: true,
+                            countered: pageCountered
                         )
                             .scrollDismissesKeyboard(.interactively)
                             .scrollDisabled(scrollDisabled)
                             // With settings down, any drag up puts them away again.
-                            .onPull(.bottom, isEnabled: !showsHeader, held: hold) { pulled($0, then: onPullPastEnd) }
-                            .onPull(.awayFromTop, isEnabled: showsHeader, held: hold) { pulled($0, then: onPullPastEnd) }
-                            .onPull(.top, isEnabled: !showsHeader, held: hold) { pulled($0, then: onPullPastTop) }
+                            .onPull(.bottom, isEnabled: !showsHeader, held: hold, rebound: pageRebound) { pulled($0, then: onPullPastEnd) }
+                            .onPull(.awayFromTop, isEnabled: showsHeader, held: hold, rebound: pageRebound) { pulled($0, then: onPullPastEnd) }
+                            .onPull(.top, isEnabled: !showsHeader, held: hold, rebound: pageRebound) { pulled($0, then: onPullPastTop) }
                             .id(pageID)
                             .transition(.opacity)
                             // The page goes up and out as the archive comes up from below.
@@ -160,8 +176,11 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
                         // The archive is laid out a moment before it is wanted and kept
                         // until it has gone, so it too only ever moves.
                         if archiveMounted {
-                            sheet(archive, metrics: metrics, footerZone: footerZone, minHeight: minHeight, handsOver: true)
-                                .onPull(.top, held: hold) { pulled($0, then: onPullPastTop) }
+                            sheet(
+                                archive, metrics: metrics, footerZone: footerZone, minHeight: minHeight, handsOver: true,
+                                countered: archiveCountered
+                            )
+                                .onPull(.top, held: hold, rebound: archiveRebound) { pulled($0, then: onPullPastTop) }
                                 .id(pageID)
                                 .offset(y: archiveShown || reduceMotion ? 0 : height)
                                 .opacity(archiveShown ? 1 : 0)
@@ -219,6 +238,11 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
             .environment(\.listNamesTop, showsFooter ? proxy.size.height - footerZone : nil)
             .animation(.quick, value: showsFooter)
             .animation(.sheet, value: showsHeader)
+            // Another page's sheet: whatever was being taken off the last one's paper is over.
+            .onChange(of: pageID) {
+                endRebound(from: $pageReboundFrom, counter: $pageCountered)
+                endRebound(from: $archiveReboundFrom, counter: $archiveCountered)
+            }
             .onChange(of: showsArchive, initial: true) { _, shows in
                 wantsArchive = shows
                 if shows {
@@ -247,7 +271,10 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
                     }
                     Task { @MainActor in
                         try? await Task.sleep(for: .milliseconds(700))
-                        if !wantsArchive { archiveMounted = false }
+                        if !wantsArchive {
+                            archiveMounted = false
+                            endRebound(from: $archiveReboundFrom, counter: $archiveCountered)
+                        }
                     }
                 }
             }
@@ -293,8 +320,52 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
         }
     }
 
+    /// A pull that counted was let go with the sheet still past its edge. Left
+    /// alone the scrolling brings it back in its own time, some 0.6 s, long
+    /// after the sheet that was pulled for has arrived: settings came down 60
+    /// points too far and drifted back ("too much springing", Wayne, Nov 21,
+    /// 2026). So what the scrolling does is taken off again, frame by frame,
+    /// and the paper comes to its edge with the sheet, on the same spring.
+    private func pageRebound(_ shift: CGFloat, starting: Bool) {
+        rebound(shift, starting: starting, from: $pageReboundFrom, counter: $pageCountered)
+    }
+
+    private func archiveRebound(_ shift: CGFloat, starting: Bool) {
+        rebound(shift, starting: starting, from: $archiveReboundFrom, counter: $archiveCountered)
+    }
+
+    private func rebound(_ shift: CGFloat, starting: Bool, from: Binding<Rebound?>, counter: Binding<CGFloat>) {
+        let now = CACurrentMediaTime()
+        if starting, !reduceMotion {
+            let began = Rebound(shift: shift, at: now)
+            from.wrappedValue = began
+            // Whatever becomes of the sheet meanwhile, nothing is left on the
+            // paper: by now both the scrolling and the spring are at rest.
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1))
+                if from.wrappedValue == began { endRebound(from: from, counter: counter) }
+            }
+        }
+        guard !reduceMotion, let began = from.wrappedValue, shift != 0 else {
+            endRebound(from: from, counter: counter)
+            return
+        }
+        // The sheet's own spring, worked out here for each frame the scrolling
+        // reports. Left to an animation it was stopped where it stood by the
+        // next frame's correction, and the paper snapped to its edge.
+        let pace = 2 * Double.pi / Animation.sheetResponse * (now - began.at)
+        let own = began.shift * (1 + pace) * exp(-pace)
+        counter.wrappedValue = own - shift
+    }
+
+    private func endRebound(from: Binding<Rebound?>, counter: Binding<CGFloat>) {
+        if from.wrappedValue != nil { from.wrappedValue = nil }
+        if counter.wrappedValue != 0 { counter.wrappedValue = 0 }
+    }
+
     private func sheet(
-        _ view: some View, metrics: PageMetrics, footerZone: CGFloat, minHeight: CGFloat, handsOver: Bool = false
+        _ view: some View, metrics: PageMetrics, footerZone: CGFloat, minHeight: CGFloat, handsOver: Bool = false,
+        countered: CGFloat = 0
     ) -> some View {
         ScrollView {
             VStack(spacing: 0) {
@@ -310,6 +381,7 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
                 // which changes what the scrolling reports, which moved it again,
                 // without end.
                 .offset(y: handsOver ? held : 0)
+                .offset(y: handsOver ? countered : 0)
             // The very end of the paper, below the room left for the list names.
             Color.clear.frame(height: 0).id(Self.endID)
             }
@@ -450,9 +522,10 @@ extension View {
     /// when it is let go again: see `PullTracker.held`.
     func onPull(
         _ edge: PullEdge, isEnabled: Bool = true, held: @escaping (CGFloat, Bool) -> Void = { _, _ in },
+        rebound: @escaping (CGFloat, Bool) -> Void = { _, _ in },
         perform action: @escaping (Pull) -> Void
     ) -> some View {
-        modifier(PullPastEdge(edge: edge, isEnabled: isEnabled, held: held, action: action))
+        modifier(PullPastEdge(edge: edge, isEnabled: isEnabled, held: held, rebound: rebound, action: action))
     }
 }
 
@@ -506,6 +579,32 @@ struct PullTracker {
         return 0
     }
 
+    /// The scrolling is bringing the sheet back from a pull that counted.
+    private(set) var isRebounding = false
+
+    /// The finger lifted. True when a pull counted and the sheet is still past
+    /// its edge: from here until it is back, `rebounded` says how far it is.
+    mutating func rebounds() -> Bool {
+        // Away from the top, "past" is how far the sheet has been scrolled,
+        // which it does not come back from: only a real edge springs back.
+        guard edge != .awayFromTop, isHandedOver, !isHolding, past > 0 else { return false }
+        isRebounding = true
+        return true
+    }
+
+    /// The sheet moved. How far past its edge the scrolling still has it, on
+    /// the way back from a pull; nothing the rest of the time. `exactly` is
+    /// that distance before it was rounded for the rest of what is done here.
+    mutating func rebounded(exactly: CGFloat? = nil) -> CGFloat? {
+        guard isRebounding else { return nil }
+        if past <= 0 {
+            isRebounding = false
+            return 0
+        }
+        let past = max(exactly ?? self.past, 0)
+        return edge == .top ? past : -past
+    }
+
     /// The finger lifted while the paper was being held. True if it was, so
     /// that it can be let down to its edge.
     mutating func letGo() -> Bool {
@@ -551,6 +650,7 @@ struct PullTracker {
     /// A finger came down on the sheet. `isEnabled` is whether this pull is on offer now.
     mutating func began(past: CGFloat, offset: CGFloat, isEnabled: Bool = true) {
         isDragging = true
+        isRebounding = false
         armed = isEnabled
         beganAtEdge = past >= -1
         startOffset = offset
@@ -590,6 +690,7 @@ private struct PullPastEdge: ViewModifier {
     let edge: PullEdge
     let isEnabled: Bool
     let held: (CGFloat, Bool) -> Void
+    let rebound: (CGFloat, Bool) -> Void
     let action: (Pull) -> Void
 
     /// Kept out of the view's state: it changes on every frame of a drag.
@@ -600,10 +701,14 @@ private struct PullPastEdge: ViewModifier {
 
     @State private var box: Box
 
-    init(edge: PullEdge, isEnabled: Bool, held: @escaping (CGFloat, Bool) -> Void, action: @escaping (Pull) -> Void) {
+    init(
+        edge: PullEdge, isEnabled: Bool, held: @escaping (CGFloat, Bool) -> Void,
+        rebound: @escaping (CGFloat, Bool) -> Void, action: @escaping (Pull) -> Void
+    ) {
         self.edge = edge
         self.isEnabled = isEnabled
         self.held = held
+        self.rebound = rebound
         self.action = action
         _box = State(initialValue: Box(edge))
     }
@@ -622,6 +727,8 @@ private struct PullPastEdge: ViewModifier {
                 let wasDragging = old == .interacting || old == .tracking
                 let dragging = new == .interacting || new == .tracking
                 if dragging, !wasDragging {
+                    // Caught again on its way back: the scrolling has it as it is.
+                    if box.tracker.isRebounding { rebound(0, false) }
                     box.tracker.began(
                         past: past(context.geometry), offset: context.geometry.contentOffset.y, isEnabled: isEnabled
                     )
@@ -630,10 +737,14 @@ private struct PullPastEdge: ViewModifier {
                     if box.tracker.released(), isEnabled { action(box.tracker.pull) }
                     // Lifted while the paper was held: it settles to its edge.
                     if box.tracker.letGo() { held(0, true) }
+                    if box.tracker.rebounds(), let shift = box.tracker.rebounded() { rebound(shift, true) }
                 }
             }
-            .onScrollGeometryChange(for: CGPoint.self) { geometry in
-                CGPoint(x: past(geometry).rounded(), y: geometry.contentOffset.y.rounded())
+            .onScrollGeometryChange(for: Reading.self) { geometry in
+                let past = past(geometry)
+                // Rounded for deciding what a pull is. Not for what is taken off
+                // the paper on its way back: that has to be exact.
+                return Reading(x: past.rounded(), y: geometry.contentOffset.y.rounded(), exactPast: past)
             } action: { _, new in
                 #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("-logPulls"), edge == .top {
@@ -642,7 +753,14 @@ private struct PullPastEdge: ViewModifier {
                 #endif
                 if box.tracker.changed(past: new.x, offset: new.y), isEnabled { action(box.tracker.pull) }
                 if let shift = box.tracker.held() { held(shift, false) }
+                if let shift = box.tracker.rebounded(exactly: new.exactPast) { rebound(shift, false) }
             }
+    }
+
+    private struct Reading: Equatable {
+        let x: CGFloat
+        let y: CGFloat
+        let exactPast: CGFloat
     }
 }
 

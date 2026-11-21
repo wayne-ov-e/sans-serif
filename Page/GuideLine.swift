@@ -14,6 +14,8 @@ struct GuideLine: View {
     /// "Circle what matters.": a loop drawn round the line circles it, with a dotted loop to follow.
     var circlesByDrag = false
     var isCircled = false
+    /// The small raised word after a line that repeats, as on the page.
+    var mark: String?
     var strikeColor: Color = .ink
     /// Lines in the archive are simply there.
     var writesIn = true
@@ -21,6 +23,7 @@ struct GuideLine: View {
     var onCircled: () -> Void = {}
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.pageMetrics) private var metrics
 
     @State private var lines: [StrikeLine] = []
     /// Lines struck so far. See `StrikeMarks`.
@@ -37,8 +40,17 @@ struct GuideLine: View {
 
     private var strokes: [Stroke] { Stroke.generated(lines: max(lines.count, 1), seed: seed) }
 
+    private var words: Text {
+        guard let mark, !isStruck else { return Text(text) }
+        let small = Text(mark)
+            .font(.system(size: metrics.countSize, design: .serif))
+            .baselineOffset(metrics.taskSize * 0.36)
+            .foregroundStyle(.inkFaded)
+        return Text("\(Text(text))  \(small)")
+    }
+
     var body: some View {
-        Text(text)
+        words
             .typeStyle(.task)
             .foregroundStyle(isStruck ? .inkFaded : .ink)
             .overlayPreferenceValue(Text.LayoutKey.self) { layouts in

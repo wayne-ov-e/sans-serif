@@ -83,6 +83,8 @@ private extension View {
 struct GuideGesture: View {
     enum Kind { case sideways, up, down }
     let kind: Kind
+    /// How long this one's dotted path is. Shorter where the page is nearly full.
+    var length: CGFloat = GuideGesture.length
 
     /// How long the dotted path is, as in Figma frame 10 First run: Pull up.
     static let length: CGFloat = 150
@@ -100,17 +102,17 @@ struct GuideGesture: View {
                 )
             case .up:
                 GuidePath(
-                    from: CGPoint(x: middle, y: Self.length - half),
+                    from: CGPoint(x: middle, y: length - half),
                     to: CGPoint(x: middle, y: half)
                 )
             case .down:
                 GuidePath(
                     from: CGPoint(x: middle, y: half),
-                    to: CGPoint(x: middle, y: Self.length - half)
+                    to: CGPoint(x: middle, y: length - half)
                 )
             }
         }
-        .frame(height: kind == .sideways ? 44 : Self.length)
+        .frame(height: kind == .sideways ? 44 : length)
         .transition(.opacity)
     }
 }

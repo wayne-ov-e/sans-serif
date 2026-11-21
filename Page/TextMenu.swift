@@ -46,7 +46,8 @@ struct MenuRow: View {
     var label: String?
     /// A line above the row: on a shared list, who wrote the task.
     var note: String?
-    /// A row of days: sliding it is felt, a tick for each day that goes by.
+    /// A row of days, one or more of them chosen. Any row that is slid
+    /// sideways is felt, a tick for about each word that goes by.
     var ticks = false
     /// The word the row opens on, slid into view: the day already chosen.
     var showing: String?
@@ -114,11 +115,14 @@ private struct RowThatScrolls: ViewModifier {
                 .scrollIndicators(.hidden)
                 .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
                 .scrollClipDisabled()
-                // Each day that slides by is felt (Wayne, Nov 20, 2026).
+                // Each word that slides by is felt, whatever the row holds:
+                // days, the things to do with a task, the lists to move it to
+                // (Wayne, Nov 20 and 21, 2026). A row that fits does not slide.
                 .onScrollGeometryChange(for: Int.self) { geometry in
-                    Int((geometry.contentOffset.x / Self.tick).rounded(.down))
+                    // Never below nothing: pulled a point past its start the row is not a word along.
+                    Int((max(geometry.contentOffset.x, 0) / Self.tick).rounded(.down))
                 } action: { old, new in
-                    if ticks, old != new, opened { Tap.step() }
+                    if old != new, opened { Tap.step() }
                 }
                 .onChange(of: label, initial: true) {
                     // A new row of words: it opens on the one chosen, and

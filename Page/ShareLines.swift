@@ -27,6 +27,8 @@ struct ShareLines: View {
     }
 
     @State private var load = Load.asking
+    /// The share itself, as iCloud last gave it: what "Send link" hands over.
+    @State private var share: CKShare?
     /// Something is on its way to iCloud. The lines wait.
     @State private var isBusy = false
     @State private var isConfirmingStop = false
@@ -119,12 +121,28 @@ struct ShareLines: View {
         }
         if !list.isSomeoneElses {
             if people.count < 2 { note("Anyone with the link can join and write.") }
-            ShareLink(
-                item: link, subject: Text(list.name), message: Text("Join my list, \(list.name)"),
-                // The share sheet shows the list's card and name, not a bare link.
-                preview: SharePreview(list.name, image: ShareCard.image(named: list.name))
-            ) {
-                line("Send link")
+            // The share itself is sent, not its bare link. Given only a link,
+            // Messages looked the address up and drew iCloud's logo (Wayne,
+            // Nov 21, 2026); given the share, it draws the list's name and the
+            // card that `CloudSync.dress` put on it. The price is Apple's
+            // "Collaborate" line at the top of the share sheet.
+            Group {
+                if let share {
+                    ShareLink(
+                        item: ListInvite(share: share, link: link), subject: Text(list.name),
+                        message: Text("Join my list, \(list.name)"),
+                        preview: SharePreview(list.name, image: ShareCard.image(named: list.name))
+                    ) {
+                        line("Send link")
+                    }
+                } else {
+                    ShareLink(
+                        item: link, subject: Text(list.name), message: Text("Join my list, \(list.name)"),
+                        preview: SharePreview(list.name, image: ShareCard.image(named: list.name))
+                    ) {
+                        line("Send link")
+                    }
+                }
             }
             .buttonStyle(.plain)
             word(copied ? "Copied" : "Copy link") { copy(link) }
@@ -276,6 +294,7 @@ struct ShareLines: View {
         defer { isBusy = false }
         do {
             let share = try await share()
+            self.share = share
             load = .known(
                 link: share?.url,
                 people: share.map { SharePerson.people(on: $0, myName: CloudSync.shared.myName) } ?? []
@@ -465,5 +484,27 @@ private struct PersonLine: View {
         .accessibilityAddTraits(strike == nil ? [] : .isButton)
         .accessibilityHint(strike == nil ? "" : "Takes them off the list")
         .accessibilityAction { if !isStruck { strike?() } }
+    }
+}
+
+/// A shared list as it is handed to the share sheet: the share for what can
+/// show an invitation as one, as Messages does, and the plain link for the rest.
+struct ListInvite: Transferable {
+    let share: CKShare
+    let link: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        CKShareTransferRepresentation { invite in
+            // The link is the invitation: anyone given it may join and write.
+            // Nothing else is offered, so the sheet has no choices to show.
+            .existing(
+                invite.share, container: CKContainer(identifier: PageStore.cloudContainer),
+                allowedSharingOptions: CKAllowedSharingOptions(
+                    allowedParticipantPermissionOptions: .readWrite,
+                    allowedParticipantAccessOptions: .anyoneWithLink
+                )
+            )
+        }
+        ProxyRepresentation(exporting: \.link)
     }
 }

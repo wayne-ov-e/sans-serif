@@ -13,7 +13,7 @@ struct GuideView: View {
 
     /// The lines, in order.
     enum Step: Int, CaseIterable {
-        case cross, write, hold, circle, swipe, pullUp, pullDown, end
+        case cross, write, hold, circle, repeats, swipe, pullUp, pullDown, end
 
         var line: String {
             switch self {
@@ -21,6 +21,7 @@ struct GuideView: View {
             case .write: "Tap below and write your own."
             case .hold: "Hold a line for more."
             case .circle: "Circle what matters."
+            case .repeats: "Hold me to repeat."
             case .swipe: "Swipe along the bottom for the next list."
             case .pullUp: "Pull up for what is done."
             case .pullDown: "Pull down for settings."
@@ -35,6 +36,7 @@ struct GuideView: View {
             case .write: "Tap the empty paper and write a task."
             case .hold: "Hold a line to open its menu, then put the menu away."
             case .circle: "Draw a loop round the line, or hold it and choose Circle."
+            case .repeats: "Hold the line, choose Repeat, then how often."
             case .swipe: "Swipe sideways along the bottom of the page to the next list, then swipe back."
             case .pullUp: "Drag up to see what is done, then drag down to come back."
             case .pullDown: "Drag down to see settings, then drag up to come back."
@@ -67,6 +69,10 @@ struct GuideView: View {
     @State private var isDraggingTurn = false
     /// "Circle what matters." has its loop.
     @State private var isCircled = false
+    /// The held line's row shows how often, after Repeat was chosen.
+    @State private var isChoosingRepeat = false
+    /// How often the repeat line was set to come back: the small word after it.
+    @State private var repeatMark: String?
     /// Counted for the haptic of a page turned.
     @State private var turnTaps = 0
     /// Counted for the haptic of a step crossed off.
@@ -97,7 +103,7 @@ struct GuideView: View {
             if keyboardIsUp, let which = HourEntry.shared.typing {
                 HourEntryWords(which: which)
             } else if menuLine != nil {
-                MenuRow(options: menuOptions)
+                MenuRow(options: isChoosingRepeat ? repeatOptions : menuOptions, label: isChoosingRepeat ? "Repeat" : nil)
             } else if keyboardIsUp {
                 BottomWord(word: "done") { isWriting = false }
                     .frame(maxWidth: .infinity, alignment: .trailing)
@@ -163,11 +169,19 @@ struct GuideView: View {
                     }
                 }
             }
-            // The pulls are made on the empty paper, and have their guide there.
-            switch step {
-            case .pullUp where !showsArchive: GuideGesture(kind: .up).padding(.top, 44)
-            case .pullDown where !showsSettings: GuideGesture(kind: .down).padding(.top, 44)
-            default: EmptyView()
+        }
+        // The pulls are made on the empty paper, and have their guide there,
+        // below the last line. It lies over the paper and adds nothing to its
+        // length: with nine lines above, it made the page longer than the
+        // screen, and a drag up then moved the page along instead of pulling it.
+        .overlay(alignment: .bottom) {
+            Color.clear.frame(height: 0).overlay(alignment: .top) {
+                switch step {
+                case .pullUp where !showsArchive: GuideGesture(kind: .up).padding(.top, 36)
+                // The page is at its fullest here: shorter, and closer to the line.
+                case .pullDown where !showsSettings: GuideGesture(kind: .down, length: 96).padding(.top, 36)
+                default: EmptyView()
+                }
             }
         }
         .padding(.bottom, metrics.taskGap)
@@ -182,14 +196,15 @@ struct GuideView: View {
             isStruck: each.rawValue < step.rawValue,
             seed: each.seed,
             strikesByDrag: isActive && each == .cross,
-            showsRing: isActive && each == .hold && menuLine == nil,
+            showsRing: isActive && (each == .hold || each == .repeats) && menuLine == nil && repeatMark == nil,
             circlesByDrag: isActive && each == .circle,
             isCircled: each == .circle && isCircled,
+            mark: each == .repeats ? repeatMark : nil,
             onStruckByDrag: { complete(.cross, felt: true) },
             onCircled: circle
         )
         .holdable(
-            id: each.rawValue, isEnabled: step == .hold || step == .circle, menuLine: $menuLine, options: menuOptions
+            id: each.rawValue, isEnabled: holds, menuLine: $menuLine, options: menuOptions
         )
         .fadesUnderListNames()
         .accessibilityElement(children: .ignore)
@@ -209,7 +224,7 @@ struct GuideView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .holdable(
-                id: Self.ownLine, isEnabled: step == .hold || step == .circle, menuLine: $menuLine, options: menuOptions
+                id: Self.ownLine, isEnabled: holds, menuLine: $menuLine, options: menuOptions
             )
             .fadesUnderListNames()
             .transition(.opacity)
@@ -252,18 +267,40 @@ struct GuideView: View {
         .padding(.bottom, metrics.taskGap)
     }
 
-    /// The menu a held line opens. Here every line of it only puts the menu
-    /// away, but Circle: that one does what the circle line asks for.
+    /// A line can be held for its menu from the step that says so until the
+    /// steps about the menu are done.
+    private var holds: Bool { step == .hold || step == .circle || step == .repeats }
+
+    /// The menu a held line opens: the same six words as on the page. Here
+    /// they only put the menu away, but Circle and Repeat: those do what
+    /// their own lines ask for.
     private var menuOptions: [MenuOption] {
         [
             MenuOption(title: "Move to") { closeMenu() },
             MenuOption(title: "Copy") { closeMenu() },
+            MenuOption(title: "Select") { closeMenu() },
             MenuOption(title: "Circle") {
                 closeMenu()
                 circle()
             },
+            MenuOption(title: "Repeat") {
+                // Only the repeat line, on its own step, goes on to how often.
+                if step == .repeats, menuLine == Step.repeats.rawValue {
+                    isChoosingRepeat = true
+                } else {
+                    closeMenu()
+                }
+            },
             MenuOption(title: "Delete", isDestructive: true) { closeMenu() },
         ]
+    }
+
+    /// How often, as the page asks. Here any of them will do, and the days of
+    /// a week or a month are not gone into: the word alone is written.
+    private var repeatOptions: [MenuOption] {
+        ["Daily", "Weekly", "Monthly", "Yearly"].map { word in
+            MenuOption(title: word) { setRepeat(word.lowercased()) }
+        }
     }
 
     /// The names at the bottom of the page for the swipe: the user's first two lists.
@@ -302,9 +339,22 @@ struct GuideView: View {
         }
     }
 
+    /// The repeat line has its small word. It is left to be seen for a moment before the line is struck.
+    private func setRepeat(_ mark: String) {
+        closeMenu()
+        guard step == .repeats, repeatMark == nil else { return }
+        repeatMark = mark
+        steps += 1
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(0.9))
+            complete(.repeats, felt: true)
+        }
+    }
+
     private func closeMenu() {
         guard menuLine != nil else { return }
         menuLine = nil
+        isChoosingRepeat = false
         complete(.hold)
     }
 
