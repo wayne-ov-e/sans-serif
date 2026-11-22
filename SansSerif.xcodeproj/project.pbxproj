@@ -21,6 +21,7 @@
 		1ED6C03330937D5D47451C2A /* ListLogic.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3800C991BAE5FFB35C174DB1 /* ListLogic.swift */; };
 		1FE1B63AEA3560F7E75139A7 /* Ink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AC72C351E02C2F609B72011 /* Ink.swift */; };
 		2298DF8A4F3F572360832A5E /* TypeStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6FD13F66668E7E30E7D6F55 /* TypeStyle.swift */; };
+		24E44FC14A86906AF4FAA83E /* Deck.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB0458328111F2E840A67167 /* Deck.swift */; };
 		2A1FC1EB66C0A4BF1B92D753 /* LiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 410625FAE8AE618397A3EFF8 /* LiveView.swift */; };
 		31EFE476FC2311E792850D1A /* StrikeTaskIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16DA3D250BAA5AE0562735B9 /* StrikeTaskIntent.swift */; };
 		3239E182282C918382C15AFF /* Ink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AC72C351E02C2F609B72011 /* Ink.swift */; };
@@ -179,6 +180,7 @@
 		CB4FFD65031CDA7C1A960F6A /* Stroke.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stroke.swift; sourceTree = "<group>"; };
 		CE5CB780D2B0FC1378B20E70 /* SettingsLines.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsLines.swift; sourceTree = "<group>"; };
 		DA851A87062A53546D92EB7B /* PageLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageLiveActivity.swift; sourceTree = "<group>"; };
+		DB0458328111F2E840A67167 /* Deck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Deck.swift; sourceTree = "<group>"; };
 		DD7F41651BE02E7E2D539BBD /* PageMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageMetrics.swift; sourceTree = "<group>"; };
 		DF0C5E49B965872E32934BEA /* ListNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListNames.swift; sourceTree = "<group>"; };
 		EB3FEDAA5FBA18B6542EFCDF /* TaskLine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskLine.swift; sourceTree = "<group>"; };
@@ -193,6 +195,7 @@
 			isa = PBXGroup;
 			children = (
 				63ABDEC7BDC34BD4E0A4C822 /* ArchiveLines.swift */,
+				DB0458328111F2E840A67167 /* Deck.swift */,
 				61567FA819CEF61040F5876E /* DoneLine.swift */,
 				93D26063EEC66A6E14CD3528 /* GuideLine.swift */,
 				360B3C5AA3335F409DB1B824 /* GuideMarks.swift */,
@@ -537,6 +540,7 @@
 				025B9822E027BF855A3BAE3E /* CircleMark.swift in Sources */,
 				884B2C311B349122D53B0008 /* CloudSync.swift in Sources */,
 				8C8EE44EBEFE8728EF7657D0 /* ContentView.swift in Sources */,
+				24E44FC14A86906AF4FAA83E /* Deck.swift in Sources */,
 				59591653CADB3A5E65D7B013 /* DoneLine.swift in Sources */,
 				8588A806F4435266C0B10304 /* GuideLine.swift in Sources */,
 				E4B06776F0F891B98936A3F3 /* GuideMarks.swift in Sources */,
@@ -708,7 +712,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 29;
+				CURRENT_PROJECT_VERSION = 30;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -847,7 +851,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 29;
+				CURRENT_PROJECT_VERSION = 30;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;

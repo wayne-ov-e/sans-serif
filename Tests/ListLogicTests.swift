@@ -238,109 +238,96 @@ struct GuideAndHapticsTests {
     }
 }
 
-@Suite("Pulling a sheet past its edge")
-struct PullTrackerTests {
-    /// A page that fits: 750 pt of paper in an 812 pt scroll view with a 62 pt top inset.
-    private func past(_ edge: PullEdge, offset: CGFloat, topInset: CGFloat = 62) -> CGFloat {
-        PullTracker.past(edge, offset: offset, topInset: topInset, bottomInset: 0,
-                         contentHeight: 750, containerHeight: 812)
+@Suite("The paper between settings, the page and the archive")
+struct DeckTests {
+    private let deck = Deck(settingsHeight: 300, height: 900)
+
+    @Test func aPointOfTheFingerIsAPointOfThePaperOnEitherSideOfThePage() {
+        #expect(deck.points(-1) == -300)
+        #expect(deck.points(1) == 900)
+        #expect(deck.place(points: -150) == -0.5)
+        #expect(deck.place(points: 450) == 0.5)
+        // Down 150 from the page is half way to settings; up 450 is half way to the archive.
+        #expect(deck.dragged(from: 0, by: 150, low: -1, high: 1) == -0.5)
+        #expect(deck.dragged(from: 0, by: -450, low: -1, high: 1) == 0.5)
     }
 
-    @Test func aPageThatFitsRestsAtBothEdges() {
-        #expect(past(.top, offset: -62) == 0)
-        #expect(past(.bottom, offset: -62) == 0)
+    @Test func thePaperDoesNotMoveTowardASideThatIsNotOpen() {
+        // A long page scrolled away from its top: down is for the list, not for settings.
+        #expect(deck.dragged(from: 0, by: 200, low: 0, high: 1) == 0)
+        #expect(deck.dragged(from: 0, by: -200, low: -1, high: 0) == 0)
     }
 
-    @Test func aDragPastTheEndCountsOnceWhileTheFingerIsDown() {
-        var pull = PullTracker(edge: .bottom)
-        pull.began(past: 0, offset: -62)
-        #expect(pull.changed(past: 20, offset: -42) == false)
-        #expect(pull.changed(past: 45, offset: -17) == true)
-        #expect(pull.changed(past: 60, offset: -2) == false)
-        #expect(pull.released() == false)
+    @Test func pastSettingsAndPastTheArchiveItGivesLessAndLess() {
+        let little = deck.points(deck.dragged(from: 1, by: -40, low: 0, high: 1)) - 900
+        let more = deck.points(deck.dragged(from: 1, by: -400, low: 0, high: 1)) - 900
+        let far = deck.points(deck.dragged(from: 1, by: -4000, low: 0, high: 1)) - 900
+        // It goes with the finger, by less than the finger asks, and never beyond its reach.
+        #expect(little > 0 && little < 40)
+        #expect(more > little && more < 400 * Deck.give)
+        #expect(far > more && far < Deck.reach)
+        #expect(deck.dragged(from: -1, by: 100, low: -1, high: 0) < -1)
     }
 
-    @Test func aQuickPullThatBeganAtTheEdgeCountsOnRelease() {
-        var pull = PullTracker(edge: .bottom)
-        pull.began(past: 0, offset: -62)
-        #expect(pull.changed(past: 18, offset: -44) == false)
-        #expect(pull.released() == true)
+    @Test func aHarderFlickGetsAQuickerSpringAndNeverOneThatPassesItsPlace() {
+        let usual = 2 * Double.pi / Deck.response
+        // At rest, or let go slowly: the usual spring.
+        #expect(Deck.pace(from: 0, to: 900, speed: 0) == usual)
+        #expect(Deck.pace(from: 0, to: 900, speed: 500) == usual)
+        // Close to its place and still fast: quicker, enough that it does not pass.
+        let quick = Deck.pace(from: 800, to: 900, speed: 2000)
+        #expect(quick > usual)
+        #expect(quick >= 2000.0 / 100)
+        // And no quicker than the quickest.
+        #expect(Deck.pace(from: 890, to: 900, speed: 9000) == 2 * Double.pi / Deck.quickest)
     }
 
-    @Test func aScrollThatRanOnToTheEndDoesNotCountOnRelease() {
-        var pull = PullTracker(edge: .bottom)
-        // The finger came down in the middle of a long page.
-        pull.began(past: -300, offset: 100)
-        #expect(pull.changed(past: 18, offset: 418) == false)
-        #expect(pull.released() == false)
+    @Test func theArchiveIsAShortWayOffAndThePageIsGoneBeforeItIsWhole() {
+        // Under half the screen, and never the whole of it.
+        #expect(Deck.travel(screen: 874) < 874 / 2)
+        #expect(Deck.travel(screen: 874) >= 260)
+        #expect(Deck.travel(screen: 2000) == 420)
+        #expect(Deck.pageInk(up: 0) == 1)
+        #expect(Deck.archiveInk(up: 0) == 0)
+        #expect(Deck.pageInk(up: 1) == 0)
+        #expect(Deck.archiveInk(up: 1) == 1)
+        // Half way, neither is strong.
+        #expect(Deck.pageInk(up: 0.5) < 0.3)
+        #expect(Deck.archiveInk(up: 0.5) < 0.3)
     }
 
-    @Test func aBounceAfterTheFingerLiftedDoesNotCount() {
-        var pull = PullTracker(edge: .bottom)
-        pull.began(past: -300, offset: 100)
-        #expect(pull.released() == false)
-        #expect(pull.changed(past: 80, offset: 480) == false)
+    @Test func aFlickGoesOnePlaceOn() {
+        #expect(deck.target(now: -0.1, grabbed: 0, heading: 0, inFlight: false, speed: -800) == Deck.settings)
+        #expect(deck.target(now: 0.1, grabbed: 0, heading: 0, inFlight: false, speed: 800) == Deck.archive)
+        #expect(deck.target(now: -0.8, grabbed: -1, heading: -1, inFlight: false, speed: 800) == Deck.page)
+        #expect(deck.target(now: 0.9, grabbed: 1, heading: 1, inFlight: false, speed: -800) == Deck.page)
+        // However hard, from settings it stops at the page.
+        #expect(deck.target(now: -0.5, grabbed: -1, heading: -1, inFlight: false, speed: 9000) == Deck.page)
     }
 
-    /// The fault found on Nov 17, 2026: a drag up opened settings, because the
-    /// insets shifted and the sheet looked as if it were past its top.
-    @Test func lookingPastAnEdgeWithoutBeingDraggedThereDoesNotCount() {
-        var pull = PullTracker(edge: .top)
-        pull.began(past: 0, offset: -62)
-        // Dragged up 30 pt, while the inset is read as 0: 62 pt "past the top".
-        #expect(pull.changed(past: 62, offset: -32) == false)
-        #expect(pull.released() == false)
+    @Test func aSlowDragGoesOnOnlyIfItMovedThePaperFarEnough() {
+        let short = Deck.carry - 20, long = Deck.carry + 10
+        #expect(deck.target(now: deck.place(points: short), grabbed: 0, heading: 0, inFlight: false, speed: 0) == Deck.page)
+        #expect(deck.target(now: deck.place(points: -short), grabbed: 0, heading: 0, inFlight: false, speed: 0) == Deck.page)
+        #expect(deck.target(now: deck.place(points: long), grabbed: 0, heading: 0, inFlight: false, speed: 0) == Deck.archive)
+        #expect(deck.target(now: deck.place(points: -long), grabbed: 0, heading: 0, inFlight: false, speed: 0) == Deck.settings)
+        // A slow lift is not a flick, however small the movement.
+        #expect(deck.target(now: 0.02, grabbed: 0, heading: 0, inFlight: false, speed: Deck.flick - 20) == Deck.page)
     }
 
-    /// The fault Wayne found on Nov 18, 2026: the drag that put settings away
-    /// went on to open the archive. A pull that was not on offer when the finger
-    /// came down cannot count during that drag, however far it goes.
-    @Test func aPullNotOnOfferWhenTheDragBeganNeverCounts() {
-        var archive = PullTracker(edge: .bottom)
-        // Settings are down, so the archive is not on offer.
-        archive.began(past: 0, offset: -62, isEnabled: false)
-        #expect(archive.changed(past: 60, offset: -2) == false)
-        #expect(archive.changed(past: 120, offset: 58) == false)
-        #expect(archive.released() == false)
-
-        // The next drag, with settings away, is a new one.
-        archive.began(past: 0, offset: -62, isEnabled: true)
-        #expect(archive.changed(past: 45, offset: -17) == true)
+    @Test func twoFlicksGoTwoPlaces() {
+        // Up from settings, caught half way to the page, and flicked up again: the archive.
+        #expect(deck.target(now: -0.4, grabbed: -0.5, heading: 0, inFlight: true, speed: 800) == Deck.archive)
+        // Down from the archive, caught on its way to the page, and flicked down again: settings.
+        #expect(deck.target(now: 0.4, grabbed: 0.5, heading: 0, inFlight: true, speed: -800) == Deck.settings)
+        // Caught on its way and sent back: only as far as where it came from.
+        #expect(deck.target(now: -0.6, grabbed: -0.5, heading: 0, inFlight: true, speed: -800) == Deck.settings)
     }
 
-    @Test func thePaperIsHeldWhenTheScrollingLetsGoOfItUnderTheFinger() {
-        var tracker = PullTracker(edge: .top)
-        tracker.began(past: 0, offset: -62)
-        let before = tracker.held()
-        #expect(before == nil)
-        let counted = tracker.changed(past: 47, offset: -109)
-        #expect(counted)
-        #expect(tracker.pull.shift == 47)
-        // Following the finger, there is nothing to hold.
-        _ = tracker.changed(past: 61, offset: -123)
-        let following = tracker.held()
-        #expect(following == nil)
-        // Settings arrive, and for a frame or two the sheet reads as back at its edge.
-        _ = tracker.changed(past: 0, offset: -62)
-        let first = tracker.held()
-        #expect(first == 61)
-        _ = tracker.changed(past: 0, offset: -62)
-        let second = tracker.held()
-        #expect(second == 61)
-        // The finger moves, the scrolling has the sheet again, and the hold ends.
-        _ = tracker.changed(past: 46, offset: -108)
-        let resumed = tracker.held()
-        #expect(resumed == 0)
-        // Lifted, the sheet springs back by itself. Nothing is held.
-        _ = tracker.released()
-        _ = tracker.changed(past: 20, offset: -82)
-        let springing = tracker.held()
-        #expect(springing == nil)
-        _ = tracker.changed(past: 0, offset: -62)
-        let rested = tracker.held()
-        #expect(rested == nil)
-        let nothingToLetGo = tracker.letGo()
-        #expect(!nothingToLetGo)
+    @Test func itNeverGoesWhereTheFingerMayNotTakeIt() {
+        // A long page not at its end: a flick up scrolls the list, and the paper stays on the page.
+        #expect(deck.target(now: 0, grabbed: 0, heading: 0, inFlight: false, speed: 800, low: -1, high: 0) == Deck.page)
+        #expect(deck.target(now: 0, grabbed: 0, heading: 0, inFlight: false, speed: -800, low: 0, high: 1) == Deck.page)
     }
 
     #if os(iOS)
@@ -354,39 +341,6 @@ struct PullTrackerTests {
     }
     #endif
 
-    @Test func aQuickPullBegunWhileAShortSheetSpringsBackCounts() {
-        // Settings were just put away: the page, all of it in view, is still
-        // 30 points up from its top, on its way back. A quick pull moves it 25
-        // points and lets go short of its top: it counts.
-        var quick = PullTracker(edge: .top)
-        quick.began(past: -30, offset: -32, fits: true)
-        let early = quick.changed(past: -5, offset: -57)
-        #expect(!early)
-        let flicked = quick.released()
-        #expect(flicked)
-
-        // Dragged 40 points, it counts while the finger is still down,
-        // though it never gets past its top.
-        var dragged = PullTracker(edge: .top)
-        dragged.began(past: -80, offset: 18, fits: true)
-        let far = dragged.changed(past: -30, offset: -32)
-        #expect(far)
-
-        // The other way it is no pull down at all.
-        var wrongWay = PullTracker(edge: .top)
-        wrongWay.began(past: -30, offset: -32, fits: true)
-        _ = wrongWay.changed(past: -80, offset: 18)
-        let up = wrongWay.released()
-        #expect(!up)
-
-        // A long page scrolled that far is being scrolled, not pulled.
-        var scrolled = PullTracker(edge: .top)
-        scrolled.began(past: -30, offset: -32)
-        _ = scrolled.changed(past: -5, offset: -57)
-        let scroll = scrolled.released()
-        #expect(!scroll)
-    }
-
     @Test func theListForTheLiveViewIsReadFromSettingsOrIsNone() throws {
         let defaults = try #require(UserDefaults(suiteName: "live-\(UUID().uuidString)"))
         #expect(LiveView.chosenList(defaults: defaults) == nil)
@@ -398,89 +352,6 @@ struct PullTrackerTests {
             defaults.set(nothing, forKey: LiveView.listKey)
             #expect(LiveView.chosenList(defaults: defaults) == nil)
         }
-    }
-
-    @Test func aPullLetGoPastTheEdgeIsFollowedBackToIt() {
-        var tracker = PullTracker(edge: .top)
-        tracker.began(past: 0, offset: -62)
-        // Nothing has counted yet: the scrolling brings it back by itself.
-        _ = tracker.changed(past: 10, offset: -72)
-        let early = tracker.rebounds()
-        #expect(!early)
-        let counted = tracker.changed(past: 61, offset: -123)
-        #expect(counted)
-        _ = tracker.held()
-        _ = tracker.released()
-        let rebounds = tracker.rebounds()
-        #expect(rebounds)
-        let first = tracker.rebounded()
-        #expect(first == 61)
-        _ = tracker.changed(past: 30, offset: -92)
-        let halfway = tracker.rebounded()
-        #expect(halfway == 30)
-        // What is taken off the paper is the distance before it was rounded.
-        _ = tracker.changed(past: 12, offset: -74)
-        let exact = tracker.rebounded(exactly: 12.4)
-        #expect(exact == 12.4)
-        // Back at its edge: told once, and then no more.
-        _ = tracker.changed(past: 0, offset: -62)
-        let back = tracker.rebounded(exactly: 0.3)
-        #expect(back == 0)
-        let after = tracker.rebounded()
-        #expect(after == nil)
-
-        // Away from the top a sheet is only scrolled, and does not come back.
-        var away = PullTracker(edge: .awayFromTop)
-        away.began(past: 0, offset: -62)
-        _ = away.changed(past: 30, offset: -32)
-        _ = away.released()
-        let scrolled = away.rebounds()
-        #expect(!scrolled)
-
-        // Up past the end is a shift up, and a finger coming down again ends it.
-        var up = PullTracker(edge: .bottom)
-        up.began(past: 0, offset: 0)
-        _ = up.changed(past: 45, offset: 45)
-        _ = up.released()
-        let upRebounds = up.rebounds()
-        #expect(upRebounds)
-        let shift = up.rebounded()
-        #expect(shift == -45)
-        up.began(past: 20, offset: 20)
-        #expect(!up.isRebounding)
-    }
-
-    @Test func aFingerLiftedWhileThePaperIsHeldLetsItDown() {
-        var tracker = PullTracker(edge: .bottom)
-        tracker.began(past: 0, offset: 0)
-        let counted = tracker.changed(past: 45, offset: 45)
-        #expect(counted)
-        #expect(tracker.pull.shift == -45)
-        _ = tracker.held()
-        _ = tracker.changed(past: 0, offset: 0)
-        let held = tracker.held()
-        // Up past the end, the paper is held above its edge.
-        #expect(held == -45)
-        _ = tracker.released()
-        let letDown = tracker.letGo()
-        #expect(letDown)
-        let again = tracker.letGo()
-        #expect(!again)
-    }
-
-    @Test func oneDragCountsOnlyOnce() {
-        var pull = PullTracker(edge: .awayFromTop)
-        pull.began(past: 0, offset: -62)
-        #expect(pull.changed(past: 22, offset: -40) == true)
-        #expect(pull.changed(past: 80, offset: 18) == false)
-        #expect(pull.released() == false)
-    }
-
-    @Test func withSettingsDownAnyDragUpCounts() {
-        var pull = PullTracker(edge: .awayFromTop)
-        pull.began(past: 0, offset: -62)
-        #expect(pull.changed(past: 12, offset: -50) == false)
-        #expect(pull.changed(past: 22, offset: -40) == true)
     }
 }
 

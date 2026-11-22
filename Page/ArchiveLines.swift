@@ -17,6 +17,9 @@ struct ArchiveLines: View {
     @Environment(\.modelContext) private var context
     @Environment(\.pageMetrics) private var metrics
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Empty paper below the last line of the archive.
+    private static var endRoom: CGFloat { 56 }
+
     /// Months whose fold has been changed by hand, and to what.
     @State private var opened: [Date: Bool] = [:]
 
@@ -53,7 +56,9 @@ struct ArchiveLines: View {
                 .padding(.top, gap(above: index, in: months))
             }
         }
-        .padding(.bottom, metrics.taskGap)
+        // Room to breathe under the last line, so a long archive does not end
+        // hard against the list names (Wayne, Nov 22, 2026).
+        .padding(.bottom, metrics.taskGap + Self.endRoom)
         // A tap anywhere but on the menu puts it away.
         .contentShape(Rectangle())
         .onTapGesture { if menuTaskID != nil { closeMenu() } }
@@ -101,6 +106,9 @@ struct ArchiveLines: View {
     }
 
     private func isOpen(_ month: ArchiveMonth) -> Bool {
+        // This month stands open and past months are folded, until tapped.
+        // All were folded for a moment on Nov 22, 2026, and Wayne: "don't
+        // fold away current month".
         opened[month.month] ?? Calendar.current.isDate(month.month, equalTo: .now, toGranularity: .month)
     }
 

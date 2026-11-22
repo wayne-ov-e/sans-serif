@@ -27,7 +27,7 @@ struct PageLiveActivity: Widget {
                             WidgetTask(line: line, size: 18, ink: .white, faded: .white.opacity(0.5), inActivity: true)
                         }
                         if list.lines.isEmpty {
-                            Text("Nothing left").font(.system(size: 18, design: .serif)).foregroundStyle(.white.opacity(0.5))
+                            Text(PageSnapshot.emptyWords).font(.system(size: 18, design: .serif)).foregroundStyle(.white.opacity(0.5))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
@@ -58,7 +58,7 @@ private struct LockScreenPage: View {
                 WidgetTask(line: line, size: 19, inActivity: true)
             }
             if list.lines.isEmpty {
-                Text("Nothing left").font(.system(size: 19, design: .serif)).foregroundStyle(.inkFaded)
+                Text(PageSnapshot.emptyWords).font(.system(size: 19, design: .serif)).foregroundStyle(.inkFaded)
             }
             HStack(alignment: .firstTextBaseline, spacing: 3) {
                 Text(list.name).font(.system(size: 13, design: .serif))

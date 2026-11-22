@@ -278,7 +278,7 @@ struct TaskLines: View {
 
 /// What an empty list's page says, in faded ink where its first task will go.
 struct EmptyPageWords: View {
-    static let words = "Nothing to do."
+    static let words = PageSnapshot.emptyWords
 
     var body: some View {
         Text(Self.words)

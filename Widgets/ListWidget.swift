@@ -133,7 +133,10 @@ struct ListWidgetView: View {
                 ForEach(list.lines(2)) { line in
                     WidgetTask(line: line, size: 15, ink: .primary, faded: .secondary)
                 }
-                if list.lines.isEmpty { name(list, size: 15) }
+                if list.lines.isEmpty {
+                    Text(PageSnapshot.emptyWords).font(.system(size: 15, design: .serif)).foregroundStyle(.secondary)
+                    name(list, size: 13)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         case .systemLarge:
@@ -150,6 +153,13 @@ struct ListWidgetView: View {
         VStack(alignment: .leading, spacing: gap) {
             ForEach(list.lines(lines)) { line in
                 WidgetTask(line: line, size: size)
+            }
+            // An empty list says so, where its first task would be, as the
+            // page does: it used to show nothing but its name.
+            if list.lines.isEmpty {
+                Text(PageSnapshot.emptyWords)
+                    .font(.system(size: size, design: .serif))
+                    .foregroundStyle(.inkFaded)
             }
             Spacer(minLength: 0)
             name(list, size: 13)

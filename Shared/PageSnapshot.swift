@@ -4,6 +4,11 @@ import Foundation
 /// first few lines of it. The app writes it after every change. A widget
 /// cannot open the app's store, so this is all it reads.
 struct PageSnapshot: Codable, Equatable, Sendable {
+    /// What an empty list says, on the page, in a widget and in the live
+    /// view: the same words everywhere (Wayne, Nov 22, 2026: "Fix empty
+    /// widget saying nothing as well").
+    static let emptyWords = "Nothing to do."
+
     struct Line: Codable, Hashable, Sendable, Identifiable {
         var id: UUID
         var text: String

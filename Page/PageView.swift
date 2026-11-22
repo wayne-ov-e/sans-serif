@@ -65,6 +65,8 @@ struct PageView: View {
     /// and the one turned to is a picture until it lands.
     @State private var leavesAsItself = false
     @State private var pendingSlide: PendingSlide?
+    /// The page a finger's drag along the bottom set out from.
+    @State private var dragOrigin: TaskList?
     /// A finger is moving the row.
     @State private var isDraggingTurn = false
     /// Where the open page is while the row moves by itself. See `TurnFlight`.
@@ -136,6 +138,9 @@ struct PageView: View {
             contentReceded: menu?.listID != nil,
             footerStaysClear: (keyboardIsUp && keysAreElsewhere) || showsFootnotes,
             scrollDisabled: isLifting,
+            // A pen across a line, striking it or going round it, has the
+            // page too: the sheets do not move under a circle being drawn.
+            sheetsHeld: isWriting || isCrossing || menu != nil || picked != nil,
             onTapPaper: tapPaper,
             turn: CGFloat(index(of: list)) - place,
             strip: strip,
@@ -166,6 +171,13 @@ struct PageView: View {
         .haptic(.turn, trigger: turnTaps)
         // The archive and settings, coming and going, are felt the same way.
         .sheetHaptics(showsArchive, quietly: turnPutsSheetsAway)
+        // A sheet coming or going, a menu opening, a line picked up or
+        // leaving: the display is asked for its full rate while they move.
+        .onChange(of: showsArchive) { FullRate.shared.hold() }
+        .onChange(of: showsSettings) { FullRate.shared.hold() }
+        .onChange(of: menu) { FullRate.shared.hold(for: 0.5) }
+        .onChange(of: isLifting) { FullRate.shared.hold(for: 0.6) }
+        .onChange(of: tasksOnPage.count) { FullRate.shared.hold(for: 0.6) }
         // The question about deleting what is done is asked afresh for each menu.
         .onChange(of: menu) { _, _ in
             isConfirmingDone = false
@@ -409,7 +421,12 @@ struct PageView: View {
             isTurnArmed = false
             caught = 0
             caughtAt = nil
-            position = CGFloat(index(of: list))
+            // The page it set out from is the open one again, if the drag
+            // had already brought the next one in.
+            let origin = dragOrigin ?? list
+            dragOrigin = nil
+            if origin !== list { select(origin) }
+            position = CGFloat(index(of: origin))
         }
         // Whatever was about to leave waits.
         holds += 1
@@ -465,10 +482,15 @@ struct PageView: View {
     /// the row goes on from where it is, at the speed it has.
     /// What was being written stays on the list it was written on.
     /// `speed`: a finger let go of the row at this speed, in pages a second.
-    private func go(to target: TaskList, animation: Animation? = nil, speed: CGFloat? = nil) {
+    /// `origin`: the page a finger's drag set out from, when the open page is
+    /// already the one it was bringing in.
+    private func go(
+        to target: TaskList, animation: Animation? = nil, speed: CGFloat? = nil, from origin: TaskList? = nil
+    ) {
         addDraft()
         focus = nil
-        let changesCourse = target !== (heading ?? list)
+        FullRate.shared.hold()
+        let changesCourse = target !== (heading ?? origin ?? list)
         // Coming back to the page that never left: nothing needs covering.
         let returns = target === list && !stripCovers
         heading = target
@@ -676,11 +698,16 @@ struct PageView: View {
         if !isDraggingTurn {
             caught = 0
             caughtAt = nil
+            dragOrigin = list
         }
         isDraggingTurn = true
         isTurning = true
         heading = nil
-        let here = CGFloat(index(of: list))
+        FullRate.shared.hold(for: 0.5)
+        // The page the drag set out from. The open one may by now be the
+        // page it is heading for: see below.
+        let origin = dragOrigin ?? list
+        let here = CGFloat(index(of: origin))
         let last = CGFloat(max(lists.count - 1, 0))
         // How far the row has been moved from the open page, the catch included.
         let amount = (amount - caught).clamped(to: -1...1)
@@ -689,8 +716,27 @@ struct PageView: View {
         if wanted < 0 { wanted *= 0.2 }
         if wanted > last { wanted = last + (wanted - last) * 0.2 }
         position = wanted
+        // The page the finger is bringing in is made the real one now, as the
+        // drag sets out, and the page it leaves becomes its picture. When the
+        // finger lets go there is then nothing left to change: the row runs
+        // on to its place and the page is already the one to pull, write on
+        // and turn. Changed at the landing instead, it could not be pulled
+        // for a moment after every swipe (Wayne, Nov 22, 2026: "i don't like
+        // the scroll lock added"). Changed as the finger let go, the row
+        // stood still for the frames it took. Here the row has barely moved.
+        if list === origin, amount != 0, leavesAsItsPicture,
+           let coming = lists.neighbour(of: origin, by: amount < 0 ? 1 : -1) {
+            var still = Transaction()
+            still.disablesAnimations = true
+            withTransaction(still) {
+                leavesAsItself = false
+                stripCovers = false
+                pageIsScrolled = false
+                select(coming)
+            }
+        }
         // The same distance `turnEnded` asks for.
-        let armed = abs(amount) > 0.35 && lists.neighbour(of: list, by: amount < 0 ? 1 : -1) != nil
+        let armed = abs(amount) > 0.35 && lists.neighbour(of: origin, by: amount < 0 ? 1 : -1) != nil
         if armed != isTurnArmed {
             isTurnArmed = armed
             turnArms += 1
@@ -722,6 +768,7 @@ struct PageView: View {
             heading = nil
             isTurning = true
             isDraggingTurn = true
+            dragOrigin = lists[nearest]
         }
         // A drag of this length from the nearest page would stand at
         // `nearest - amount`. The row is at `now`.
@@ -742,18 +789,20 @@ struct PageView: View {
         // A quick flick turns the way the finger went, wherever the row was caught.
         let flicked = abs(finger) > 0.05 && speed * finger > 0 && abs(speed) > 1.2
         if flicked { amount = finger }
-        let neighbour = lists.neighbour(of: list, by: amount < 0 ? 1 : -1)
+        let origin = dragOrigin ?? list
+        dragOrigin = nil
+        let neighbour = lists.neighbour(of: origin, by: amount < 0 ? 1 : -1)
         // Far enough. A row that was caught and let go again goes to the page
         // nearest the middle: it is not sent back against the turn it was on.
         let far = abs(amount) > (wasCaught ? 0.5 : 0.35)
         if amount != 0, let neighbour, far || flicked {
             // The page goes on at the speed the finger had. The row moves
             // against the finger's count: a drag to the left is a turn onward.
-            go(to: neighbour, speed: -speed)
+            go(to: neighbour, speed: -speed, from: origin)
         } else {
             // Pulled well past the first or the last page: the paper stops there.
             if neighbour == nil, abs(amount) > 0.2 { bumps += 1 }
-            go(to: list, animation: .settle)
+            go(to: origin, animation: .settle, from: origin)
         }
     }
 

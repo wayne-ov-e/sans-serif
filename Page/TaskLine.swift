@@ -67,6 +67,7 @@ struct TaskLine: View {
     /// How much of the loop round the task is drawn, from 0 to 1.
     @State private var circled = 0.0
     @State private var circles = 0
+    @State private var uncircles = 0
     /// Where the finger has been, while a drag that began as a strike turns into a loop.
     @State private var loop: [CGPoint] = []
 
@@ -120,9 +121,14 @@ struct TaskLine: View {
                     withAnimation(animates ? .easeOut(duration: new ? 0.42 : 0.2) : nil) { circled = new ? 1 : 0 }
                     // Felt only when it was circled here, by this hand: a
                     // loop arriving from another device is drawn in silence.
-                    if old != new, new, CircleTouch.wasJustNow { circles += 1 }
+                    // Taking the circle off is felt too, as the pen lifting
+                    // (Wayne, Nov 22, 2026: "Uncircle also needs haptics").
+                    if old != new, CircleTouch.wasJustNow {
+                        if new { circles += 1 } else { uncircles += 1 }
+                    }
                 }
                 .haptic(.pen, trigger: circles)
+                .haptic(.lift, trigger: uncircles)
                 .animation(.ink, value: task.isLive)
                 .haptic(.drag, trigger: ticks)
                 .haptic(.release, trigger: releases)
