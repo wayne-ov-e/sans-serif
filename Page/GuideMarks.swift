@@ -81,7 +81,7 @@ private extension View {
 /// The guide for a gesture made on the empty paper: a swipe to the side, a pull
 /// up, a pull down. It stands in the paper below the lines.
 struct GuideGesture: View {
-    enum Kind { case sideways, up, down }
+    enum Kind { case sideways, back, up, down }
     let kind: Kind
     /// How long this one's dotted path is. Shorter where the page is nearly full.
     var length: CGFloat = GuideGesture.length
@@ -100,6 +100,12 @@ struct GuideGesture: View {
                     from: CGPoint(x: middle + Self.length / 2, y: proxy.size.height / 2),
                     to: CGPoint(x: middle - Self.length / 2, y: proxy.size.height / 2)
                 )
+            case .back:
+                // Left to right: the page that was left is to the left.
+                GuidePath(
+                    from: CGPoint(x: middle - Self.length / 2, y: proxy.size.height / 2),
+                    to: CGPoint(x: middle + Self.length / 2, y: proxy.size.height / 2)
+                )
             case .up:
                 GuidePath(
                     from: CGPoint(x: middle, y: length - half),
@@ -112,7 +118,7 @@ struct GuideGesture: View {
                 )
             }
         }
-        .frame(height: kind == .sideways ? 44 : length)
+        .frame(height: kind == .sideways || kind == .back ? 44 : length)
         .transition(.opacity)
     }
 }

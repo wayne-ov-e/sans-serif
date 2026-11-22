@@ -84,7 +84,6 @@ struct GuideView: View {
         PageColumn(
             showsArchive: showsArchive,
             showsHeader: showsSettings,
-            footerStaysClear: keyboardIsUp && HourEntry.shared.typing != nil,
             onTapPaper: tapPaper,
             turn: -position,
             // The next list's page stands beside this one for the swipe, as in the app.
@@ -94,15 +93,21 @@ struct GuideView: View {
             onPullPastEnd: pullPastEnd,
             onPullPastTop: pullPastTop
         ) {
-            SettingsLines(showsGestures: false)
+            VStack(alignment: .leading, spacing: metrics.settingsGap) {
+                SettingsLines(showsGestures: false)
+                // Away from the page, the way back is said, and shown
+                // (Wayne, Nov 21, 2026: "more clear scroll back and next step
+                // instructions").
+                if step == .pullDown {
+                    wayBack("Pull up to come back.", mark: .up)
+                }
+            }
         } content: {
             lines
         } archive: {
             archive
         } footer: {
-            if keyboardIsUp, let which = HourEntry.shared.typing {
-                HourEntryWords(which: which)
-            } else if menuLine != nil {
+            if menuLine != nil {
                 MenuRow(options: isChoosingRepeat ? repeatOptions : menuOptions, label: isChoosingRepeat ? "Repeat" : nil)
             } else if keyboardIsUp {
                 BottomWord(word: "done") { isWriting = false }
@@ -129,7 +134,12 @@ struct GuideView: View {
                 .animation(.quick, value: isOnNext)
                 // The swipe is made down here, along the names.
                 .overlay(alignment: .top) {
-                    if !hasSeenNext { GuideGesture(kind: .sideways).offset(y: -40) }
+                    if !hasSeenNext {
+                        GuideGesture(kind: .sideways).offset(y: -40)
+                    } else if isOnNext {
+                        // And back again, the other way.
+                        GuideGesture(kind: .back).offset(y: -40)
+                    }
                 }
             } else {
                 BottomWord(word: "skip", isFaded: true) { end(struck: false) }
@@ -263,8 +273,29 @@ struct GuideView: View {
                     .accessibilityLabel(each.line)
                     .accessibilityValue("Struck")
             }
+            if step == .pullUp {
+                wayBack("Pull down to come back.", mark: .down)
+                    .padding(.top, metrics.taskGap - metrics.archiveTaskGap)
+            }
         }
         .padding(.bottom, metrics.taskGap)
+    }
+
+    /// Where the tutorial has led away from its page: what brings it back, in
+    /// ink among what is faded there, with the dotted mark for it below.
+    private func wayBack(_ words: String, mark: GuideGesture.Kind) -> some View {
+        Text(words)
+            .typeStyle(.task)
+            .foregroundStyle(.ink)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .bottom) {
+                Color.clear.frame(height: 0).overlay(alignment: .top) {
+                    GuideGesture(kind: mark, length: 96).padding(.top, 28)
+                }
+            }
+            // Gone at once when the way back is taken: fading, it lay over
+            // the lines above it as they went.
+            .transition(.identity)
     }
 
     /// A line can be held for its menu from the step that says so until the
@@ -276,10 +307,10 @@ struct GuideView: View {
     /// their own lines ask for.
     private var menuOptions: [MenuOption] {
         [
-            MenuOption(title: "Move to") { closeMenu() },
-            MenuOption(title: "Copy") { closeMenu() },
-            MenuOption(title: "Select") { closeMenu() },
-            MenuOption(title: "Circle") {
+            MenuOption(title: "Move to") { closeMenu(felt: true) },
+            MenuOption(title: "Copy") { closeMenu(felt: true) },
+            MenuOption(title: "Select") { closeMenu(felt: true) },
+            MenuOption(title: "Circle", hasOwnHaptic: true) {
                 closeMenu()
                 circle()
             },
@@ -288,7 +319,7 @@ struct GuideView: View {
                 if step == .repeats, menuLine == Step.repeats.rawValue {
                     isChoosingRepeat = true
                 } else {
-                    closeMenu()
+                    closeMenu(felt: true)
                 }
             },
             MenuOption(title: "Delete", isDestructive: true) { closeMenu() },
@@ -343,19 +374,20 @@ struct GuideView: View {
     private func setRepeat(_ mark: String) {
         closeMenu()
         guard step == .repeats, repeatMark == nil else { return }
+        // The word tapped was felt already.
         repeatMark = mark
-        steps += 1
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(0.9))
             complete(.repeats, felt: true)
         }
     }
 
-    private func closeMenu() {
+    /// - Parameter felt: a word was tapped, and felt as a word is.
+    private func closeMenu(felt: Bool = false) {
         guard menuLine != nil else { return }
         menuLine = nil
         isChoosingRepeat = false
-        complete(.hold)
+        complete(.hold, felt: felt)
     }
 
     private func tapPaper() {
@@ -363,7 +395,7 @@ struct GuideView: View {
             closeMenu()
         } else if showsSettings {
             showsSettings = false
-            complete(.pullDown)
+            complete(.pullDown, felt: true)
         } else if step == .write, !showsArchive {
             isWriting.toggle()
         }
@@ -376,7 +408,8 @@ struct GuideView: View {
         draft = ""
         guard !text.isEmpty, step == .write else { return }
         ownTask = text
-        complete(.write)
+        // "done" was felt as the word it is.
+        complete(.write, felt: true)
     }
 
     /// The swipe turns to the next list's page and back, as it does in the app.
@@ -423,7 +456,7 @@ struct GuideView: View {
         guard menuLine == nil, !isWriting else { return }
         if showsSettings {
             showsSettings = false
-            complete(.pullDown)
+            complete(.pullDown, felt: true)
         } else if step.rawValue >= Step.pullUp.rawValue {
             showsArchive = true
         }
@@ -433,7 +466,7 @@ struct GuideView: View {
         guard menuLine == nil, !isWriting else { return }
         if showsArchive {
             showsArchive = false
-            complete(.pullUp)
+            complete(.pullUp, felt: true)
         } else if step.rawValue >= Step.pullDown.rawValue {
             showsSettings = true
         }

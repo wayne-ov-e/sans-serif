@@ -57,8 +57,6 @@ struct ArchiveLines: View {
         // A tap anywhere but on the menu puts it away.
         .contentShape(Rectangle())
         .onTapGesture { if menuTaskID != nil { closeMenu() } }
-        // The menu opening is felt, as it is on the page.
-        .haptic(.pen, trigger: menuTaskID) { $0 != nil }
         .animation(.quick, value: menuTaskID)
     }
 

@@ -12,6 +12,8 @@ struct PagePreview: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: metrics.taskGap) {
+            // As the page itself says it, so it is there as the page comes in.
+            if list.liveTasks.isEmpty { EmptyPageWords() }
             // Only what a screen can show. These pages stand off the edge of the
             // paper at all times, one for every other list, so a long list must
             // not cost its whole length there.

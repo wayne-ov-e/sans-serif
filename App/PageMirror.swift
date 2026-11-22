@@ -64,7 +64,7 @@ extension ModelContext {
 }
 
 /// Keeps what is outside the app in step with the page: the widgets, and the
-/// Live Activity of the working hours.
+/// Live Activity of the list chosen for it.
 @MainActor
 final class PageMirror {
     static let shared = PageMirror()
@@ -119,6 +119,6 @@ final class PageMirror {
             WidgetCenter.shared.reloadAllTimelines()
         }
         // The Live Activity is drawn at once, so there a struck line leaves a moment after the strike.
-        WorkHoursActivity.sync(snapshot.leaving(struckBefore: Date.now.addingTimeInterval(-PageSnapshot.linger)))
+        LiveView.sync(snapshot.leaving(struckBefore: Date.now.addingTimeInterval(-PageSnapshot.linger)))
     }
 }

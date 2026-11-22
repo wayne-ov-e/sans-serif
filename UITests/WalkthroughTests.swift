@@ -173,6 +173,15 @@ final class WalkthroughTests: XCTestCase {
         app.buttons["home"].press(forDuration: 1)
         XCTAssertTrue(app.buttons["Rename"].waitForExistence(timeout: 3), "holding a list name opens its menu")
         XCTAssertTrue(app.buttons["Delete list"].exists)
+        // Live view puts this list on the Lock Screen; held again, the menu offers to end it.
+        XCTAssertTrue(app.buttons["Live view"].exists, "the list menu offers the live view")
+        app.buttons["Live view"].tap()
+        XCTAssertTrue(gone(app.buttons["Rename"]), "choosing it puts the menu away")
+        app.buttons["home"].press(forDuration: 1)
+        XCTAssertTrue(app.buttons["End live view"].waitForExistence(timeout: 3), "the list is the live one now")
+        app.buttons["End live view"].tap()
+        app.buttons["home"].press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Live view"].waitForExistence(timeout: 3), "and ended, it is offered again")
         point(0.5, 0.4).tap()
         XCTAssertTrue(gone(app.buttons["Rename"]), "a tap on the page puts the menu away")
 
@@ -183,37 +192,9 @@ final class WalkthroughTests: XCTestCase {
             line(name).tap()
             line(name).tap()
         }
-        // Work hours: struck and back like the others, and each hour changes where it stands.
-        wait(for: "Work hours")
-        line("Work hours").tap()
-        XCTAssertTrue(gone(first("Ends")), "struck, the hours are put away")
-        line("Work hours").tap()
-        wait(for: "Ends")
-        let end = line("Ends").value as? String
-        // A tap brings up the number keys, and one key is enough for most hours.
-        Thread.sleep(forTimeInterval: 1)
-        line("Ends").tap()
-        type("7")
-        wait(for: "Ends")
-        XCTAssertNotEqual(line("Ends").value as? String, end, "a typed number becomes the hour")
-        XCTAssertEqual(line("Ends").value as? String, WorkHours7PM.name, "7 after a morning start is 7 in the evening")
-        // AM and PM stand above the keys while an hour is typed.
-        line("Starts").tap()
-        XCTAssertTrue(app.buttons[Calendar.current.pmSymbol].waitForExistence(timeout: 3), "PM is above the keys")
-        app.buttons[Calendar.current.amSymbol].tap()
-        type("6")
-        wait(for: "Starts")
-        line("Ends").tap()
-        XCTAssertTrue(app.buttons[Calendar.current.amSymbol].waitForExistence(timeout: 3))
-        app.buttons[Calendar.current.amSymbol].tap()
-        app.buttons["done"].tap()
-        wait(for: "Ends")
-        XCTAssertEqual(line("Ends").value as? String, WorkHours7AM.name, "AM moves 7 PM to 7 AM")
-
-        let start = line("Starts").value as? String
-        let word = line("Starts").coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
-        word.press(forDuration: 0.05, thenDragTo: word.withOffset(CGVector(dx: -60, dy: 0)))
-        XCTAssertNotEqual(line("Starts").value as? String, start, "a drag across an hour runs through the hours")
+        // The working hours are gone from settings: a list is put on the
+        // Lock Screen from its own menu instead.
+        XCTAssertFalse(first("Work hours").exists, "settings no longer have work hours")
 
         point(0.5, 0.85).tap()
         XCTAssertTrue(gone(first("Show counts")), "a tap on the page puts settings away")
@@ -449,19 +430,6 @@ final class WalkthroughTests: XCTestCase {
     }
 
     // MARK: Helpers
-
-    private enum WorkHours7AM {
-        static var name: String {
-            (Calendar.current.date(bySettingHour: 7, minute: 0, second: 0, of: .now) ?? .now).formatted(.dateTime.hour())
-        }
-    }
-
-    /// Seven in the evening, as this device writes hours.
-    private enum WorkHours7PM {
-        static var name: String {
-            (Calendar.current.date(bySettingHour: 19, minute: 0, second: 0, of: .now) ?? .now).formatted(.dateTime.hour())
-        }
-    }
 
     /// The first thing on the page that reads as `label`. Quick, for asking whether it is there.
     private func first(_ label: String) -> XCUIElement {

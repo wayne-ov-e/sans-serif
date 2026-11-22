@@ -416,7 +416,7 @@ struct PageEdgeTests {
 @Suite("Settings at the edges")
 struct SettingsEdgeTests {
     private let all = [
-        Setting.showCounts, Setting.iCloudSync, Setting.haptics, Setting.darkPaper, Setting.workHours,
+        Setting.showCounts, Setting.iCloudSync, Setting.haptics, Setting.darkPaper,
         Setting.guideDone, Setting.guideReplay,
     ]
 
@@ -424,13 +424,12 @@ struct SettingsEdgeTests {
         #expect(Setting.showCounts.defaultValue)
         #expect(Setting.iCloudSync.defaultValue)
         #expect(Setting.haptics.defaultValue)
-        #expect(Setting.workHours.defaultValue)
         #expect(!Setting.guideDone.defaultValue)
         #expect(!Setting.guideReplay.defaultValue)
     }
 
-    @Test func noSettingSharesAKeyWithAnotherOrWithTheWorkHours() {
-        let keys = all.map(\.key) + [WorkHours.startKey, WorkHours.endKey]
+    @Test func noSettingSharesAKeyWithAnotherOrWithTheLiveView() {
+        let keys = all.map(\.key) + [LiveView.listKey]
         #expect(Set(keys).count == keys.count)
         #expect(keys.allSatisfy { !$0.isEmpty && !$0.contains(" ") })
     }

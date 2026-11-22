@@ -22,7 +22,7 @@ struct SansSerifApp: App {
                 // Nothing left over in the widgets, and no Live Activity during a test.
                 SharedPage.shared.reset()
             }
-            WorkHoursActivity.isAllowed = !isTest
+            LiveView.isAllowed = !isTest
             let arguments = ProcessInfo.processInfo.arguments
             // The iCloud sync line in settings. Struck, the lists stay on this device.
             // It is read once, here: a change takes effect the next time the app opens.

@@ -16,11 +16,8 @@ struct ContentView: View {
     /// With Dark paper on, the paper is dark whenever the system is. Struck, it stays light.
     @AppStorage(Setting.darkPaper.key) private var darkPaper = Setting.darkPaper.defaultValue
 
-    /// The working hours, and whether the page shows on the Lock Screen during them.
-    @AppStorage(Setting.workHours.key) private var workHours = Setting.workHours.defaultValue
-    @AppStorage(WorkHours.startKey) private var workStart = WorkHours.standard.start
-    @AppStorage(WorkHours.endKey) private var workEnd = WorkHours.standard.end
-    @AppStorage(WorkHours.listKey) private var workList = ""
+    /// The list shown as a Live Activity, if one is.
+    @AppStorage(LiveView.listKey) private var liveList = ""
     @Environment(\.scenePhase) private var scenePhase
     #if os(macOS)
     @Environment(\.controlActiveState) private var controlActiveState
@@ -46,8 +43,7 @@ struct ContentView: View {
             }
             // While the app is open it keeps asking iCloud for what others have written.
             .onChange(of: scenePhase, initial: true) { _, phase in CloudSync.shared.watch(phase == .active) }
-            .onChange(of: [workHours ? 1 : 0, workStart, workEnd]) { _, _ in PageMirror.shared.refresh() }
-            .onChange(of: workList) { _, _ in PageMirror.shared.refresh() }
+            .onChange(of: liveList) { _, _ in PageMirror.shared.refresh() }
             // A tap on a widget opens its list: sansserif://list/<id>.
             .onOpenURL { url in
                 guard url.host() == "list", let id = UUID(uuidString: url.lastPathComponent),

@@ -9,9 +9,6 @@ enum Setting {
     static let iCloudSync = BoolSetting(key: "iCloudSync", defaultValue: true)
     static let haptics = BoolSetting(key: "haptics", defaultValue: true)
     static let darkPaper = BoolSetting(key: "darkPaper", defaultValue: true)
-    /// The page stays on the Lock Screen as a Live Activity during working
-    /// hours. The hours themselves are kept by `WorkHours`.
-    static let workHours = BoolSetting(key: "workHours", defaultValue: true)
 
     /// The first page has been finished or skipped (brief: First run).
     static let guideDone = BoolSetting(key: "guideDone", defaultValue: false)
@@ -22,4 +19,29 @@ enum Setting {
 struct BoolSetting: Sendable {
     let key: String
     let defaultValue: Bool
+}
+
+/// Where the two small words at the foot of settings lead (App Store 5.1.1(i)
+/// and 1.5): the privacy policy, and a way to reach the developer. Each word
+/// shows only once it has somewhere to go.
+enum AppLinks {
+    /// The published privacy policy. Not set yet: Wayne has to give its address.
+    static let privacy: URL? = nil
+    /// A page or a mailto: address for writing to the developer. Not set yet.
+    static let contact: URL? = nil
+
+    /// The words to show, in order. `-previewLinks` shows both with stand-in
+    /// addresses, to see them before the real ones are given.
+    static var shown: [(word: String, url: URL)] {
+        var privacy = privacy, contact = contact
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-previewLinks") {
+            privacy = URL(string: "https://example.com/privacy")
+            contact = URL(string: "https://example.com/contact")
+        }
+        #endif
+        return [("Privacy", privacy), ("Contact", contact)].compactMap { pair in
+            pair.1.map { (pair.0, $0) }
+        }
+    }
 }

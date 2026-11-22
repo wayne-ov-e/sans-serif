@@ -324,7 +324,7 @@ struct WidgetEdgeTests {
     // MARK: The app keeping the drawer in step
 
     @Test func theAppTakesInATapAndWritesThePageBack() throws {
-        WorkHoursActivity.isAllowed = false
+        LiveView.isAllowed = false
         let list = try #require(try context.addList(named: "work"))
         let one = try #require(context.addTask("One", to: list))
         context.addTask("Two", to: list)
@@ -353,7 +353,7 @@ struct WidgetEdgeTests {
     }
 
     @Test func theAppWritesNothingWhenNothingChanged() throws {
-        WorkHoursActivity.isAllowed = false
+        LiveView.isAllowed = false
         let list = try #require(try context.addList(named: "work"))
         context.addTask("One", to: list)
         let mirror = PageMirror()

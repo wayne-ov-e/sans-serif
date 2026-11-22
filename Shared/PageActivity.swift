@@ -2,13 +2,13 @@
 import ActivityKit
 import Foundation
 
-/// The page on the Lock Screen and in the Dynamic Island during working hours.
+/// One list on the Lock Screen and in the Dynamic Island: the live view.
 struct PageActivityAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable, Sendable {
         var list: PageSnapshot.List
     }
 
-    /// When the working hours end.
+    /// When the system will take it down: eight hours after it was put up.
     var ends: Date
 
     /// Lines the Lock Screen has room for.

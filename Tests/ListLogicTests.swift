@@ -354,6 +354,52 @@ struct PullTrackerTests {
     }
     #endif
 
+    @Test func aQuickPullBegunWhileAShortSheetSpringsBackCounts() {
+        // Settings were just put away: the page, all of it in view, is still
+        // 30 points up from its top, on its way back. A quick pull moves it 25
+        // points and lets go short of its top: it counts.
+        var quick = PullTracker(edge: .top)
+        quick.began(past: -30, offset: -32, fits: true)
+        let early = quick.changed(past: -5, offset: -57)
+        #expect(!early)
+        let flicked = quick.released()
+        #expect(flicked)
+
+        // Dragged 40 points, it counts while the finger is still down,
+        // though it never gets past its top.
+        var dragged = PullTracker(edge: .top)
+        dragged.began(past: -80, offset: 18, fits: true)
+        let far = dragged.changed(past: -30, offset: -32)
+        #expect(far)
+
+        // The other way it is no pull down at all.
+        var wrongWay = PullTracker(edge: .top)
+        wrongWay.began(past: -30, offset: -32, fits: true)
+        _ = wrongWay.changed(past: -80, offset: 18)
+        let up = wrongWay.released()
+        #expect(!up)
+
+        // A long page scrolled that far is being scrolled, not pulled.
+        var scrolled = PullTracker(edge: .top)
+        scrolled.began(past: -30, offset: -32)
+        _ = scrolled.changed(past: -5, offset: -57)
+        let scroll = scrolled.released()
+        #expect(!scroll)
+    }
+
+    @Test func theListForTheLiveViewIsReadFromSettingsOrIsNone() throws {
+        let defaults = try #require(UserDefaults(suiteName: "live-\(UUID().uuidString)"))
+        #expect(LiveView.chosenList(defaults: defaults) == nil)
+        let id = UUID()
+        defaults.set(id.uuidString, forKey: LiveView.listKey)
+        #expect(LiveView.chosenList(defaults: defaults) == id)
+        // Turned off, it is written empty; nonsense is none too.
+        for nothing in ["", "not a list"] {
+            defaults.set(nothing, forKey: LiveView.listKey)
+            #expect(LiveView.chosenList(defaults: defaults) == nil)
+        }
+    }
+
     @Test func aPullLetGoPastTheEdgeIsFollowedBackToIt() {
         var tracker = PullTracker(edge: .top)
         tracker.began(past: 0, offset: -62)

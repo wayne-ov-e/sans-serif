@@ -7,7 +7,17 @@ struct MenuOption: Identifiable {
     var isDestructive = false
     /// One of several that is not the one chosen: a day of the week not picked.
     var isFaded = false
+    /// What it does is felt by itself (a task leaving, a loop drawn), so the
+    /// word is not felt as well.
+    var hasOwnHaptic = false
     let action: () -> Void
+
+    /// A tap on the word: felt as every word at the bottom of the page is,
+    /// then done. One that deletes is felt as the thing leaving instead.
+    @MainActor func tapped() {
+        if !isDestructive, !hasOwnHaptic { Tap.word() }
+        action()
+    }
 
     var id: String { title }
 }
@@ -23,7 +33,7 @@ struct TextMenu: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Self.gap) {
             ForEach(options) { option in
-                Button(action: option.action) {
+                Button { option.tapped() } label: {
                     Text(option.title)
                         .typeStyle(.action)
                         .foregroundStyle(option.isDestructive ? .inkRed : .ink)
@@ -77,7 +87,7 @@ struct MenuRow: View {
                     .accessibilityAddTraits(.isHeader)
             }
             ForEach(options) { option in
-                Button(action: option.action) {
+                Button { option.tapped() } label: {
                     Text(option.title)
                         .typeStyle(.action)
                         .foregroundStyle(option.isDestructive ? .inkRed : option.isFaded ? .inkFaded : .ink)

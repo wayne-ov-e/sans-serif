@@ -27,11 +27,15 @@ struct TaskLines: View {
     var pick: ((TaskItem) -> Void)?
     /// The empty line grew or shrank by a row as it was written on.
     var draftRows: ((CGFloat) -> Void)?
+    /// The page has nothing on it and nothing is being written: it says so.
+    var showsEmptyWords = false
 
     @Environment(\.modelContext) private var context
     @Environment(\.pageMetrics) private var metrics
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Counted for the haptic of a line put down in a new place.
+    /// Counts the places a carried line has passed.
+    @State private var slots = 0
     @State private var drops = 0
 
     /// Where each task sits when nothing is being carried.
@@ -117,6 +121,15 @@ struct TaskLines: View {
                 .focused(focus, equals: .newTask)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height.rounded() } action: { draftRows?($0) }
                 .accessibilityLabel("New task")
+                // A list with nothing on it says so, where the first task
+                // will be written, until the pen is put there (Wayne, Nov 21,
+                // 2026: "when list is empty show something").
+                .overlay(alignment: .topLeading) {
+                    // Simply there or not: faded out, the app was at times
+                    // never at rest again after the first tap on an empty
+                    // page, and a UI walk waited minutes at every key.
+                    EmptyPageWords().opacity(showsEmptyWords ? 1 : 0)
+                }
                 .receded(menuTaskID != nil)
                 .disabled(picked != nil)
                 .fadesUnderListNames()
@@ -131,12 +144,11 @@ struct TaskLines: View {
         }
         .animation(.quick, value: menuTaskID)
         .animation(.quick, value: menuOptions.map(\.id))
-        .haptic(.pen, trigger: menuTaskID) { $0 != nil }
         // Room to tap below the last line when the page is full.
         .padding(.bottom, metrics.taskGap)
         // Picked up, each place it passes, and put down.
         .haptic(.pickUp, trigger: carried?.id) { $0 != nil }
-        .haptic(.selection, trigger: carried?.to) { $0 != nil }
+        .haptic(.selection, trigger: slots)
         .haptic(.putDown, trigger: drops)
     }
 
@@ -188,9 +200,12 @@ struct TaskLines: View {
         moving.offset = distance
         // Its new place is below every line whose middle it has passed.
         let middle = frame.midY + distance
+        let before = moving.to
         moving.to = tasks.count { other in
             other.id != moving.id && (frames[other.id]?.midY ?? .infinity) < middle
         }
+        // Each place it passes is felt. Not the picking up, which has its own.
+        if moving.to != before { slots += 1 }
         carried = moving
     }
 
@@ -258,5 +273,18 @@ struct TaskLines: View {
             carried = nil
         }
         isLifting = false
+    }
+}
+
+/// What an empty list's page says, in faded ink where its first task will go.
+struct EmptyPageWords: View {
+    static let words = "Nothing to do."
+
+    var body: some View {
+        Text(Self.words)
+            .typeStyle(.task)
+            .foregroundStyle(.inkFaded)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .allowsHitTesting(false)
     }
 }

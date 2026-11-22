@@ -380,8 +380,8 @@ private struct OwnLine: View {
                     .onSubmit(keep)
                     .onChange(of: isFocused) { _, focused in if !focused { keep() } }
                     // "done", above the keys.
-                    .onChange(of: HourEntry.shared.dones) { _, _ in keep() }
-                    .onDisappear { HourEntry.shared.isWritingElsewhere = false }
+                    .onChange(of: KeysElsewhere.shared.dones) { _, _ in keep() }
+                    .onDisappear { KeysElsewhere.shared.isWritingElsewhere = false }
                     .accessibilityLabel("Your name")
             } else {
                 Text(name.isEmpty ? "add your name" : name)
@@ -393,7 +393,7 @@ private struct OwnLine: View {
                     .contentShape(Rectangle().inset(by: -6))
                     .onTapGesture {
                         draft = name
-                        HourEntry.shared.isWritingElsewhere = true
+                        KeysElsewhere.shared.isWritingElsewhere = true
                         isTyping = true
                         isFocused = true
                     }
@@ -417,7 +417,7 @@ private struct OwnLine: View {
         guard isTyping else { return }
         isTyping = false
         isFocused = false
-        HourEntry.shared.isWritingElsewhere = false
+        KeysElsewhere.shared.isWritingElsewhere = false
         // Left as it stood, nothing was written, and nothing changes: not the
         // name the user typed before, and not iCloud's name for them.
         let written = CloudSync.tidied(draft)

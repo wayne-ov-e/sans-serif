@@ -118,7 +118,9 @@ struct TaskLine: View {
                 .onChange(of: task.isCircled, initial: true) { old, new in
                     let animates = old != new && !reduceMotion
                     withAnimation(animates ? .easeOut(duration: new ? 0.42 : 0.2) : nil) { circled = new ? 1 : 0 }
-                    if old != new, new { circles += 1 }
+                    // Felt only when it was circled here, by this hand: a
+                    // loop arriving from another device is drawn in silence.
+                    if old != new, new, CircleTouch.wasJustNow { circles += 1 }
                 }
                 .haptic(.pen, trigger: circles)
                 .animation(.ink, value: task.isLive)
@@ -137,7 +139,7 @@ struct TaskLine: View {
                 .accessibilityAction(named: task.isLive ? "Strike" : "Undo strike") {
                     task.isLive ? strikeWithoutDrag() : undo()
                 }
-                .accessibilityAction(named: task.isCircled ? "Clear circle" : "Circle") { context.toggleCircle(task) }
+                .accessibilityAction(named: task.isCircled ? "Clear circle" : "Circle") { CircleTouch.note(); context.toggleCircle(task) }
                 .accessibilityAction(named: "Show menu") { showMenu?() }
         }
     }
@@ -281,7 +283,7 @@ struct TaskLine: View {
             // The pen went round the words and came back: a circle, not a strike.
             PenHaptics.shared.stop()
             retract()
-            context.toggleCircle(task)
+            CircleTouch.note(); context.toggleCircle(task)
         case .striking:
             // Commit when the drag has passed most of the text. Otherwise the line retracts.
             if willStrike(value, on: line) {
@@ -305,7 +307,7 @@ struct TaskLine: View {
             }
         case .circling:
             // Round the words: the task is circled, or its circle cleared.
-            if Self.closes(loop + [value.location]) { context.toggleCircle(task) }
+            if Self.closes(loop + [value.location]) { CircleTouch.note(); context.toggleCircle(task) }
         case .ignored, nil:
             PenHaptics.shared.stop()
         }
@@ -426,5 +428,19 @@ struct LineField: View {
                 onReturn()
             }
             .onSubmit(onReturn)
+    }
+}
+
+/// When a task was last circled by the user's own hand, so that the loop is
+/// felt for that and not for one that arrives from elsewhere.
+@MainActor
+enum CircleTouch {
+    private static var at: Date?
+
+    static func note() { at = .now }
+
+    static var wasJustNow: Bool {
+        guard let at else { return false }
+        return Date.now.timeIntervalSince(at) < 1
     }
 }

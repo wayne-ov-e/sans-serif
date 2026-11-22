@@ -59,6 +59,11 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
     var onPullPastEnd: (() -> Void)?
     /// The archive was dragged down past its top.
     var onPullPastTop: (() -> Void)?
+    /// A drag up (true) or down made while the page was turning, when neither
+    /// sheet is there to be pulled. See `turnPull`.
+    var onPullWhileTurning: ((Bool) -> Void)?
+    /// The page has been scrolled down from its top, or is back at it.
+    var onScrolled: ((Bool) -> Void)?
     /// Lines that come down from the top edge and push the page down.
     @ViewBuilder var header: Header
     @ViewBuilder var content: Content
@@ -84,6 +89,8 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
     /// was let go, taken off again so that only `held` moves the paper. See
     /// `rebound`.
     @State private var pageCountered: CGFloat = 0
+    /// Where the drag began that was last counted as a pull during a turn: once each.
+    @State private var turnPullStart: CGPoint?
     @State private var archiveCountered: CGFloat = 0
     /// How far the paper was pulled when it was let go, and when that was.
     @State private var pageReboundFrom: Rebound?
@@ -147,6 +154,9 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
                             .onPull(.bottom, isEnabled: !showsHeader, held: hold, rebound: pageRebound) { pulled($0, then: onPullPastEnd) }
                             .onPull(.awayFromTop, isEnabled: showsHeader, held: hold, rebound: pageRebound) { pulled($0, then: onPullPastEnd) }
                             .onPull(.top, isEnabled: !showsHeader, held: hold, rebound: pageRebound) { pulled($0, then: onPullPastTop) }
+                            .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 1 } action: { _, scrolled in
+                                onScrolled?(scrolled)
+                            }
                             .id(pageID)
                             .transition(.opacity)
                             // The page goes up and out as the archive comes up from below.
@@ -224,6 +234,10 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
                 let width = max(proxy.size.width, 1)
                 onTurnEnded?(value.translation.width / width, value.velocity.width / width)
             }
+            // Given only while a turn is on its way. Not judged by where the
+            // row stands: with the real page sliding in, the row is already
+            // counted as arrived, and only its picture is still moving.
+            .simultaneousGesture(turnPull, including: onPullWhileTurning != nil ? .all : .subviews)
             #if os(macOS)
             // A two-finger swipe to the side turns the page the same way.
             .onSidewaysScroll { distance in
@@ -295,6 +309,23 @@ struct PageColumn<Header: View, Content: View, Archive: View, Footer: View>: Vie
     }
 
     private static var endID: String { "end of the page" }
+
+    /// While the page turns, and for a moment after it arrives, the sheet
+    /// under the finger is not the one that will be there: a pull up or down
+    /// made then moved nothing, and the page seemed locked for a bit after a
+    /// turn (Wayne, Nov 21, 2026). So a drag up or down in that time is taken
+    /// here, off the paper itself, and told to the page, which acts on it
+    /// when the turn has landed. Only while a turn is on its way.
+    private var turnPull: some Gesture {
+        DragGesture(minimumDistance: 16)
+            .onChanged { value in
+                guard onPullWhileTurning != nil, turnPullStart != value.startLocation else { return }
+                let moved = value.translation
+                guard abs(moved.height) >= 40, abs(moved.height) > abs(moved.width) * 1.5 else { return }
+                turnPullStart = value.startLocation
+                onPullWhileTurning?(moved.height < 0)
+            }
+    }
 
     /// Paper above the list names that still counts as the bottom of the page.
     private static var turnZoneSlack: CGFloat { 28 }
@@ -617,6 +648,8 @@ struct PullTracker {
     /// Where the sheet was when the finger came down.
     private var startOffset: CGFloat = 0
     private var beganAtEdge = false
+    /// The whole sheet was in view when the finger came down.
+    private var fits = false
     private var fired = false
     /// Whether this pull was on offer when the finger came down. One drag does
     /// one thing: a drag that puts settings away cannot go on to open the
@@ -648,11 +681,17 @@ struct PullTracker {
     }
 
     /// A finger came down on the sheet. `isEnabled` is whether this pull is on offer now.
-    mutating func began(past: CGFloat, offset: CGFloat, isEnabled: Bool = true) {
+    /// `fits`: the whole sheet is in view and cannot be scrolled. Wherever it
+    /// is then, it is at its edge: it is only away from it while it springs
+    /// back from the last pull, for half a second or so, and a quick pull
+    /// begun in that time was not counted. Up and down seemed locked for a
+    /// bit after a sheet was put away (Wayne, Nov 21, 2026).
+    mutating func began(past: CGFloat, offset: CGFloat, isEnabled: Bool = true, fits: Bool = false) {
         isDragging = true
         isRebounding = false
         armed = isEnabled
-        beganAtEdge = past >= -1
+        beganAtEdge = past >= -1 || fits
+        self.fits = fits
         startOffset = offset
         self.offset = offset
         self.past = past
@@ -664,7 +703,11 @@ struct PullTracker {
         self.past = past
         self.offset = offset
         // A flick that bounces past the end does not count: only a drag.
-        guard armed, isDragging, past >= distance, moved >= distance / 2 else { return false }
+        // A sheet all in view, caught on its way back from the last pull, may
+        // never get past its edge again under this finger: there it is how
+        // far the finger has moved it that counts.
+        let pulled = past >= distance && moved >= distance / 2
+        guard armed, isDragging, pulled || (fits && moved >= distance) else { return false }
         return fire()
     }
 
@@ -673,7 +716,7 @@ struct PullTracker {
     mutating func released() -> Bool {
         guard isDragging else { return false }
         isDragging = false
-        guard armed, beganAtEdge, past >= flickDistance, moved >= flickDistance else { return false }
+        guard armed, beganAtEdge, past >= flickDistance || fits, moved >= flickDistance else { return false }
         return fire()
     }
 
@@ -729,8 +772,11 @@ private struct PullPastEdge: ViewModifier {
                 if dragging, !wasDragging {
                     // Caught again on its way back: the scrolling has it as it is.
                     if box.tracker.isRebounding { rebound(0, false) }
+                    let geometry = context.geometry
+                    let room = geometry.containerSize.height - geometry.contentInsets.top - geometry.contentInsets.bottom
                     box.tracker.began(
-                        past: past(context.geometry), offset: context.geometry.contentOffset.y, isEnabled: isEnabled
+                        past: past(geometry), offset: geometry.contentOffset.y, isEnabled: isEnabled,
+                        fits: geometry.contentSize.height <= room + 1
                     )
                 }
                 if wasDragging, !dragging {

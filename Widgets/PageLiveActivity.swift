@@ -2,7 +2,7 @@ import ActivityKit
 import SwiftUI
 import WidgetKit
 
-/// The open list on the Lock Screen and in the Dynamic Island during working hours.
+/// The list chosen for the live view, on the Lock Screen and in the Dynamic Island.
 struct PageLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: PageActivityAttributes.self) { context in
@@ -49,7 +49,7 @@ struct PageLiveActivity: Widget {
 /// The page as it lies on the Lock Screen: tasks from the top, the list's name below.
 private struct LockScreenPage: View {
     let list: PageSnapshot.List
-    /// The working hours have ended and the app has not been opened since.
+    /// Its eight hours are over and the app has not been opened since.
     let isOver: Bool
 
     var body: some View {
